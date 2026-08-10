@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { strToU8, zipSync } from 'fflate';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -604,17 +604,19 @@ describe('address source shard catalog', () => {
       if (url.endsWith('.tar.zst')) return new Response(plateauPayload);
       throw new Error(`Unexpected request: ${url}`);
     };
-    const execute = async ({ file, args, phase }) => {
-      calls.push({ file, args, phase });
+    const execute = async ({ file, args, phase, timeoutMs }) => {
+      calls.push({ file, args, phase, timeoutMs });
       if (phase.startsWith('extract:')) {
-        const directory = args[args.indexOf('-C') + 1];
-        await mkdir(directory, { recursive: true });
-        await writeFile(resolve(directory, 'buildings.parquet'), plateauPayload, 'utf8');
+        const output = args[args.indexOf('--output') + 1];
+        await mkdir(dirname(output), { recursive: true });
+        await writeFile(output, plateauPayload, 'utf8');
       } else {
         await writeFile(args[args.indexOf('--output') + 1], `${JSON.stringify({ id: 'fixture-jp' })}\n`, 'utf8');
       }
     };
-    const adapters = createSourceAdapters({ fetchImpl, execute, pythonBin: 'python-fixture' });
+    const adapters = createSourceAdapters({
+      fetchImpl, execute, pythonBin: 'python-fixture', processTimeoutMs: 1_234
+    });
     const discovery = await adapters.discover(shard);
     expect(discovery).toMatchObject({
       adapter: 'japan-abr',
@@ -628,9 +630,15 @@ describe('address source shard catalog', () => {
     expect(materialized).toMatchObject({ format: 'overture-jsonl', cacheHit: false });
     expect(materialized.file).toContain('-m20000-p200.jsonl');
     expect(calls).toHaveLength(2);
-    expect(calls[0]).toMatchObject({ file: 'tar', phase: 'extract:japan-abr-residential:13113' });
+    expect(calls[0]).toMatchObject({
+      file: 'python-fixture', phase: 'extract:japan-abr-residential:13113', timeoutMs: 1_234
+    });
+    expect(calls[0].args).toEqual(expect.arrayContaining([
+      expect.stringContaining('extract-tar-zstd.py'), '--archive', expect.stringContaining('.tar.zst'),
+      '--output', expect.stringContaining('buildings.parquet'), '--member', 'buildings.parquet'
+    ]));
     const materializeCall = calls.find(({ phase }) => phase === 'materialize:japan-abr-residential');
-    expect(materializeCall).toMatchObject({ file: 'python-fixture' });
+    expect(materializeCall).toMatchObject({ file: 'python-fixture', timeoutMs: 28_800_000 });
     expect(materializeCall.args).toEqual(expect.arrayContaining([
       expect.stringContaining('japan-abr-export.py'), '--abr-url', shard.source.dataUrl,
       '--max-records', '20000', '--per-locality', '200', '--plateau-parquet',
@@ -1337,7 +1345,7 @@ describe('source record normalization', () => {
 });
 
 describe('built-in ETL planning and publishing', () => {
-  it('uses bounded multi-asset Overture sampling and addressed OSM ways', async () => {
+  it('matches all Overture candidates before limiting and supports OSM multipolygon buildings', async () => {
     const overture = (await readFile('server/sync/overture-export.py', 'utf8')).replace(/\r\n/g, '\n');
     const geofabrik = (await readFile('server/sync/geofabrik-export.py', 'utf8')).replace(/\r\n/g, '\n');
     const japanAbr = (await readFile('server/sync/japan-abr-export.py', 'utf8')).replace(/\r\n/g, '\n');
@@ -1346,8 +1354,7 @@ describe('built-in ETL planning and publishing', () => {
     const adapterSource = (await readFile('server/sync/source-adapters.mjs', 'utf8')).replace(/\r\n/g, '\n');
     expect(geofabrik).not.toContain('--communities-file');
     expect(overture).toContain('candidate_limit');
-    expect(overture).toContain('candidate_multiplier = 12 if args.candidate_jsonl else 4');
-    expect(overture).toContain('per_asset_limit = max(1, math.ceil(candidate_limit / len(assets)))');
+    expect(overture).toContain('CREATE TEMP VIEW address_candidates AS');
     expect(overture).toContain('candidate_sources = "\\nUNION ALL\\n".join(asset_queries)');
     expect(overture).toContain('AND bbox.xmin >= {minimum_longitude}');
     expect(overture).toContain('AND bbox.ymax <= {maximum_latitude}');
@@ -1357,10 +1364,8 @@ describe('built-in ETL planning and publishing', () => {
     expect(overture).toContain('ST_Intersects(address_candidates.geometry, residential_buildings.geometry)');
     expect(overture).not.toContain('residential_probe_limit');
     expect(overture).not.toContain('residential_grid_limit');
-    expect(overture).toContain('residential_grid_scale = 4');
-    expect(overture).toContain('count(*) AS address_count');
-    expect(overture).toContain('ORDER BY address_count DESC, grid_latitude, grid_longitude');
-    expect(overture).toContain('JOIN residential_grids ON');
+    expect(overture).not.toContain('residential_grid_scale');
+    expect(overture).not.toContain('JOIN residential_grids ON');
     expect(overture).toContain("list_transform(address_levels");
     expect(overture).toContain("coalesce(address_levels[-1].value, '') AS district");
     expect(overture).not.toContain('AND bbox.xmax >= {minimum_longitude}');
@@ -1369,7 +1374,8 @@ describe('built-in ETL planning and publishing', () => {
       overture.indexOf('residential_locality_rank <= {args.per_locality}')
     );
     expect(overture).toContain('LIMIT {args.max_records}');
-    expect(overture).toContain('Residential building classification failed; exporting address-only fallback');
+    expect(overture).toContain('raise RuntimeError(f"Residential building classification failed: {error}") from error');
+    expect(overture).not.toContain("'unknown' AS property_type");
     expect(overture).not.toContain('USING SAMPLE system(25 PERCENT)');
     expect(overture).toContain('PARTITION BY coalesce(nullif(trim(address_candidates.admin1)');
     expect(overture).toContain('residential_locality_rank');
@@ -1385,8 +1391,10 @@ describe('built-in ETL planning and publishing', () => {
     expect(adapterSource).toContain("['-4', '-sSLI', '--connect-timeout', '15', '--max-time', '60', url]");
     expect(adapterSource).toContain("expectedBytes: discovery.postcodeDataFormat === 'pdf' ? null : discovery.postcodeBytes");
     expect(geofabrik).toContain('def way(self, way, tags=None)');
-    expect(geofabrik).not.toContain('def area(self, area)');
-    expect(geofabrik).toContain('osmium.FileProcessor(args.input).with_locations(location_storage).with_filter(KeyFilter(');
+    expect(geofabrik).toContain('def area(self, area, tags)');
+    expect(geofabrik).toContain('.with_areas(KeyFilter("building"))');
+    expect(geofabrik).toContain('f"relation/{area.orig_id()}"');
+    expect(geofabrik).toContain('osmium.FileProcessor(args.input).with_locations(location_storage)');
     expect(geofabrik).toContain('sparse_file_array,{location_index}');
     expect(geofabrik).toContain('prepare(self.geometry)');
     expect(geofabrik).toContain('contains_xy(self.geometry, longitude, latitude)');

@@ -1,8 +1,6 @@
 import argparse
 import json
-import math
 import pathlib
-import sys
 
 import duckdb
 
@@ -77,9 +75,7 @@ minimum_longitude, minimum_latitude, maximum_longitude, maximum_latitude = args.
 if not (-180 <= minimum_longitude < maximum_longitude <= 180
         and -90 <= minimum_latitude < maximum_latitude <= 90):
     raise ValueError("bounds must be a valid minLon minLat maxLon maxLat box")
-candidate_multiplier = 12 if args.candidate_jsonl else 4
-candidate_limit = min(max(args.max_records, args.max_records * candidate_multiplier), 250000)
-residential_grid_scale = 4
+candidate_limit = min(max(args.max_records, args.max_records * 12), 600000)
 
 if args.candidate_jsonl:
     candidate_file = pathlib.Path(args.candidate_jsonl).resolve()
@@ -100,11 +96,9 @@ CREATE TEMP TABLE address_candidates AS
   LIMIT {candidate_limit};
 """
 else:
-    per_asset_limit = max(1, math.ceil(candidate_limit / len(assets)))
     asset_queries = []
     for asset in assets:
         asset_queries.append(f"""
-    SELECT * FROM (
     SELECT
       id,
       country,
@@ -135,62 +129,22 @@ else:
       AND nullif(trim(street), '') IS NOT NULL
       AND nullif(trim(number), '') IS NOT NULL
       AND geometry IS NOT NULL
-    LIMIT {per_asset_limit}
-    )
 """)
     candidate_sources = "\nUNION ALL\n".join(asset_queries)
     candidate_query = f"""
-CREATE TEMP TABLE address_candidates AS
+CREATE TEMP VIEW address_candidates AS
   WITH source AS (
 {candidate_sources}
   )
   SELECT 0 AS priority, *
-  FROM source
-  LIMIT {candidate_limit};
+  FROM source;
 """
 connection.execute(candidate_query)
 
-residential_grids = []
-if building_assets:
-    connection.execute(f"""
-CREATE TEMP TABLE residential_grids AS
-SELECT
-  CAST(greatest(-720, least(719, floor(longitude * {residential_grid_scale}))) AS INTEGER) AS grid_longitude,
-  CAST(greatest(-360, least(359, floor(latitude * {residential_grid_scale}))) AS INTEGER) AS grid_latitude,
-  count(*) AS address_count
-FROM address_candidates
-GROUP BY grid_longitude, grid_latitude
-ORDER BY address_count DESC, grid_latitude, grid_longitude;
-""")
-    residential_grids = connection.execute("""
-SELECT grid_longitude, grid_latitude, address_count
-FROM residential_grids
-ORDER BY address_count DESC, grid_latitude, grid_longitude;
-""").fetchall()
-
-fallback_query = f"""
-COPY (
-  SELECT * EXCLUDE (priority, geometry), 'unknown' AS property_type,
-    '' AS residential_building_id, '' AS residential_building_class
-  FROM address_candidates
-  LIMIT {args.max_records}
-) TO {output} (FORMAT JSON, ARRAY false);
-"""
-
-selected_building_assets = [
-    entry["url"] for entry in building_asset_entries
-    if entry["bbox"] is None or any(
-        entry["bbox"][2] >= grid_longitude / residential_grid_scale
-        and entry["bbox"][0] < (grid_longitude + 1) / residential_grid_scale
-        and entry["bbox"][3] >= grid_latitude / residential_grid_scale
-        and entry["bbox"][1] < (grid_latitude + 1) / residential_grid_scale
-        for grid_longitude, grid_latitude, _ in residential_grids
-    )
-]
-
-if not selected_building_assets or not residential_grids:
-    connection.execute(fallback_query)
+if not building_assets:
+    raise RuntimeError("Residential building classification requires building assets")
 else:
+    selected_building_assets = building_assets
     building_asset_list = parquet_input(selected_building_assets)
     residential_classes = "(" + ",".join(sql_string(value) for value in (
         "allotment_house", "apartments", "bungalow", "cabin", "detached", "dormitory",
@@ -200,15 +154,14 @@ else:
     classified_query = f"""
 COPY (
   WITH residential_buildings AS (
-    SELECT DISTINCT buildings.id, buildings.class, buildings.geometry
+    SELECT DISTINCT buildings.id, buildings.class, buildings.geometry, buildings.bbox
     FROM read_parquet({building_asset_list}, union_by_name=true) AS buildings
-    JOIN residential_grids ON
-      buildings.bbox.xmax >= residential_grids.grid_longitude / {residential_grid_scale}
-      AND buildings.bbox.xmin < (residential_grids.grid_longitude + 1) / {residential_grid_scale}
-      AND buildings.bbox.ymax >= residential_grids.grid_latitude / {residential_grid_scale}
-      AND buildings.bbox.ymin < (residential_grids.grid_latitude + 1) / {residential_grid_scale}
     WHERE buildings.class IN {residential_classes}
       AND buildings.geometry IS NOT NULL
+      AND buildings.bbox.xmax >= {minimum_longitude}
+      AND buildings.bbox.xmin <= {maximum_longitude}
+      AND buildings.bbox.ymax >= {minimum_latitude}
+      AND buildings.bbox.ymin <= {maximum_latitude}
   ), matches AS (
     SELECT
       address_candidates.id AS address_id,
@@ -221,7 +174,9 @@ COPY (
       ) AS building_rank
     FROM address_candidates
     JOIN residential_buildings
-      ON ST_Intersects(address_candidates.geometry, residential_buildings.geometry)
+      ON address_candidates.longitude BETWEEN residential_buildings.bbox.xmin AND residential_buildings.bbox.xmax
+      AND address_candidates.latitude BETWEEN residential_buildings.bbox.ymin AND residential_buildings.bbox.ymax
+      AND ST_Intersects(address_candidates.geometry, residential_buildings.geometry)
   ), classified AS (
     SELECT address_id, building_id, building_class
     FROM matches
@@ -263,5 +218,4 @@ COPY (
         connection.execute(classified_query)
     except Exception as error:
         pathlib.Path(args.output).unlink(missing_ok=True)
-        print(f"Residential building classification failed; exporting address-only fallback: {error}", file=sys.stderr)
-        connection.execute(fallback_query)
+        raise RuntimeError(f"Residential building classification failed: {error}") from error

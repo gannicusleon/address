@@ -15,6 +15,7 @@ const catalogFile = resolve(syncRoot, 'source-shards.json');
 const overtureExporter = resolve(syncRoot, 'overture-export.py');
 const geofabrikExporter = resolve(syncRoot, 'geofabrik-export.py');
 const japanAbrExporter = resolve(syncRoot, 'japan-abr-export.py');
+const japanPlateauExtractor = resolve(syncRoot, 'extract-tar-zstd.py');
 const singaporeHdbExporter = resolve(syncRoot, 'singapore-hdb-export.py');
 const koreaKaptExporter = resolve(syncRoot, 'korea-kapt-export.py');
 const openAddressesExporter = resolve(syncRoot, 'openaddresses-export.py');
@@ -24,8 +25,8 @@ const capeTownResidentialExporter = resolve(syncRoot, 'south-africa-cape-town-ex
 const taiwanResidentialExporter = resolve(syncRoot, 'taiwan-residential-export.py');
 const hongKongResidentialExporter = resolve(syncRoot, 'hong-kong-residential-export.py');
 const licensedResidentialExporter = resolve(syncRoot, 'licensed-residential-export.py');
-const overtureResidentialRevision = 'residential-buildings-v4';
-const geofabrikExportRevision = 'g69';
+const overtureResidentialRevision = 'residential-buildings-v5';
+const geofabrikExportRevision = 'g70';
 const japanAbrExportRevision = 'abr-rsdt-plateau-osm-chiban-v10';
 const singaporeHdbExportRevision = 'hdb-property-building-onemap-v2';
 const koreaKaptExportRevision = 'kapt-official-apartments-v2';
@@ -38,6 +39,7 @@ const hongKongResidentialExportRevision = 'bd-building-information-v1';
 const mapplsResidentialRevision = 'licensed-nearby-details-v2';
 const licensedResidentialRevision = 'licensed-feed-v2';
 const pdokBagRevision = 'strict-active-residential-coverage-round-robin-v2';
+const japanMaterializeTimeoutMs = 8 * 60 * 60_000;
 export const sourceAdapterRevisions = Object.freeze({
   overture: overtureResidentialRevision,
   geofabrik: geofabrikExportRevision,
@@ -1518,8 +1520,9 @@ export const createSourceAdapters = ({
         await rm(bundle.directory, { recursive: true, force: true });
         await mkdir(bundle.directory, { recursive: true });
         await runExecute({
-          file: 'tar',
-          args: ['-xf', bundle.bundleFile, '-C', bundle.directory, 'buildings.parquet'],
+          file: pythonBin,
+          args: [japanPlateauExtractor, '--archive', bundle.bundleFile,
+            '--output', bundle.parquetFile, '--member', 'buildings.parquet'],
           phase: `extract:${shard.id}:${bundle.cityCode}`
         });
       })
@@ -1542,7 +1545,8 @@ export const createSourceAdapters = ({
           ...(shard.source.landLot === true ? ['--land-lot'] : []),
           ...plateauArtifacts.flatMap((bundle) => ['--plateau-city-code', bundle.cityCode]),
           ...plateauArtifacts.flatMap((bundle) => ['--plateau-parquet', bundle.parquetFile])],
-        phase: `materialize:${shard.id}`
+        phase: `materialize:${shard.id}`,
+        timeoutMs: Math.max(processTimeoutMs, japanMaterializeTimeoutMs)
       });
       await rename(temporary, output);
     } finally {

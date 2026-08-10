@@ -18,6 +18,16 @@ const integer = (value, fallback, minimum, maximum) => {
   return number;
 };
 const enabled = (value) => /^(1|true|yes)$/iu.test(String(value || ''));
+const japanJobTimeoutMs = 10 * 60 * 60_000;
+
+export const syncJobTimeout = (environment, shards) => {
+  const configured = integer(environment.SYNC_JOB_TIMEOUT_MS, 90 * 60_000, 60_000, 24 * 60 * 60_000);
+  const includesJapan = shards.some((value) => {
+    const normalized = String(value).toLowerCase();
+    return normalized === 'all' || normalized === 'jp' || normalized.startsWith('japan-abr');
+  });
+  return includesJapan ? Math.max(configured, japanJobTimeoutMs) : configured;
+};
 
 const stripPrefix = (request) => {
   const url = new URL(request.url);
@@ -54,7 +64,7 @@ export const createSyncRuntime = async ({
   const coordinator = new SyncCoordinator({
     stateDir,
     now,
-    jobTimeoutMs: integer(environment.SYNC_JOB_TIMEOUT_MS, 90 * 60_000, 60_000, 24 * 60 * 60_000),
+    jobTimeoutMs: ({ shards }) => syncJobTimeout(environment, shards),
     runSync: ({ id, trigger, shards, signal }) => runSync({
       releaseId: id,
       signal,

@@ -100,6 +100,7 @@ export class SyncCoordinator {
 
   async execute(job, lock) {
     const abort = new AbortController();
+    const jobTimeoutMs = typeof this.jobTimeoutMs === 'function' ? this.jobTimeoutMs(job) : this.jobTimeoutMs;
     let timeout;
     const heartbeat = setInterval(() => {
       job.heartbeatAt = this.now().toISOString();
@@ -113,14 +114,14 @@ export class SyncCoordinator {
         phase: 'build-and-publish',
         startedAt: startedAt.toISOString(),
         heartbeatAt: startedAt.toISOString(),
-        deadlineAt: new Date(startedAt.getTime() + this.jobTimeoutMs).toISOString()
+        deadlineAt: new Date(startedAt.getTime() + jobTimeoutMs).toISOString()
       });
       await this.writeJob(job);
       const timeoutTask = new Promise((_, reject) => {
         timeout = setTimeout(() => {
-          reject(Object.assign(new Error(`Synchronization exceeded ${this.jobTimeoutMs}ms`), { code: 'SYNC_JOB_TIMEOUT' }));
+          reject(Object.assign(new Error(`Synchronization exceeded ${jobTimeoutMs}ms`), { code: 'SYNC_JOB_TIMEOUT' }));
           queueMicrotask(() => abort.abort());
-        }, this.jobTimeoutMs);
+        }, jobTimeoutMs);
         timeout.unref?.();
       });
       const result = await Promise.race([

@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSyncApi } from '../server/sync/api.mjs';
 import { SyncCoordinator } from '../server/sync/coordinator.mjs';
-import { createSyncRuntime } from '../server/sync/index.mjs';
+import { createSyncRuntime, syncJobTimeout } from '../server/sync/index.mjs';
 import {
   acquireSyncLease, assertSyncMemory, runAddressSync, syncPostgresStatementTimeout
 } from '../server/sync/run-address-sync.mjs';
@@ -34,6 +34,14 @@ const deferred = () => {
 };
 
 describe('address sync coordinator', () => {
+  it('reserves a longer hard deadline only for jobs that include Japan', () => {
+    const environment = { SYNC_JOB_TIMEOUT_MS: '14400000' };
+    expect(syncJobTimeout(environment, ['CA'])).toBe(14_400_000);
+    expect(syncJobTimeout(environment, ['JP'])).toBe(36_000_000);
+    expect(syncJobTimeout(environment, ['japan-abr-residential'])).toBe(36_000_000);
+    expect(syncJobTimeout(environment, ['all'])).toBe(36_000_000);
+  });
+
   it('persists task status and rejects concurrent manual runs', async () => {
     const execution = deferred();
     const coordinator = new SyncCoordinator({

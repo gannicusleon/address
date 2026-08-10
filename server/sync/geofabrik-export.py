@@ -285,6 +285,7 @@ class AddressSampler:
 class ResidentialBuildingMatcher:
     def __init__(self, sampler):
         self.sampler = sampler
+        self.geometry_factory = osmium.geom.GeoJSONFactory()
         self.points_by_tile = {}
         self.matches = {}
         self.inserted = 0
@@ -344,15 +345,45 @@ class ResidentialBuildingMatcher:
             if not point_in_ring(longitude, latitude, ring):
                 continue
             existing = self.matches.get(address_id)
-            if existing is None or way.id < existing[0]:
-                self.matches[address_id] = (way.id, building_class)
+            candidate = (way.id, f"way/{way.id}", building_class)
+            if existing is None or candidate[:2] < existing[:2]:
+                self.matches[address_id] = candidate
+
+    def area(self, area, tags):
+        if area.from_way():
+            return
+        building_class = tags.get("building", "").strip().casefold()
+        if building_class not in RESIDENTIAL_BUILDINGS:
+            return
+        try:
+            geometry = shape(json.loads(self.geometry_factory.create_multipolygon(area)))
+        except (RuntimeError, ValueError, json.JSONDecodeError):
+            return
+        if geometry.is_empty:
+            return
+        prepare(geometry)
+        minimum_longitude, minimum_latitude, maximum_longitude, maximum_latitude = geometry.bounds
+        minimum_tile_longitude = math.floor(minimum_longitude * 100)
+        maximum_tile_longitude = math.floor(maximum_longitude * 100)
+        minimum_tile_latitude = math.floor(minimum_latitude * 100)
+        maximum_tile_latitude = math.floor(maximum_latitude * 100)
+        building_id = f"relation/{area.orig_id()}"
+        for tile_longitude in range(minimum_tile_longitude, maximum_tile_longitude + 1):
+            for tile_latitude in range(minimum_tile_latitude, maximum_tile_latitude + 1):
+                for address_id, longitude, latitude in self.points_by_tile.get((tile_longitude, tile_latitude), ()):
+                    if not (contains_xy(geometry, longitude, latitude) or intersects_xy(geometry, longitude, latitude)):
+                        continue
+                    existing = self.matches.get(address_id)
+                    candidate = (area.orig_id(), building_id, building_class)
+                    if existing is None or candidate[:2] < existing[:2]:
+                        self.matches[address_id] = candidate
 
     def selected_matches(self, limit):
         selected = []
-        for address_id, (building_id, building_class) in self.matches.items():
+        for address_id, (_, building_id, building_class) in self.matches.items():
             record_id = f"node/{address_id}"
             record_rank = rank(record_id)
-            candidate = (-record_rank, address_id, f"way/{building_id}", building_class)
+            candidate = (-record_rank, address_id, building_id, building_class)
             if len(selected) < limit:
                 heapq.heappush(selected, candidate)
             elif record_rank < -selected[0][0]:
@@ -401,7 +432,8 @@ if pathlib.Path(args.input).stat().st_size >= 1_000_000_000:
     location_storage = f"sparse_file_array,{location_index}"
 filter_keys = ["addr:housenumber", "addr:street", "addr:place", "building"]
 try:
-    processor = osmium.FileProcessor(args.input).with_locations(location_storage).with_filter(KeyFilter(*filter_keys))
+    processor = osmium.FileProcessor(args.input).with_locations(location_storage) \
+        .with_areas(KeyFilter("building")).with_filter(KeyFilter(*filter_keys))
     try:
         for entity in processor:
             if entity.is_node():
@@ -412,6 +444,9 @@ try:
                 tags = {tag.k: tag.v for tag in entity.tags}
                 sampler.way(entity, tags)
                 matcher.way(entity, tags)
+            elif entity.is_area():
+                tags = {tag.k: tag.v for tag in entity.tags}
+                matcher.area(entity, tags)
     finally:
         del processor
         if location_index:
