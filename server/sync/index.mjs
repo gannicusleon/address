@@ -18,7 +18,7 @@ const integer = (value, fallback, minimum, maximum) => {
   return number;
 };
 const enabled = (value) => /^(1|true|yes)$/iu.test(String(value || ''));
-const japanJobTimeoutMs = 10 * 60 * 60_000;
+const japanJobTimeoutMs = 24 * 60 * 60_000;
 
 export const syncJobTimeout = (environment, shards) => {
   const configured = integer(environment.SYNC_JOB_TIMEOUT_MS, 90 * 60_000, 60_000, 24 * 60 * 60_000);

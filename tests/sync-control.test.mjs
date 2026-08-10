@@ -37,9 +37,9 @@ describe('address sync coordinator', () => {
   it('reserves a longer hard deadline only for jobs that include Japan', () => {
     const environment = { SYNC_JOB_TIMEOUT_MS: '14400000' };
     expect(syncJobTimeout(environment, ['CA'])).toBe(14_400_000);
-    expect(syncJobTimeout(environment, ['JP'])).toBe(36_000_000);
-    expect(syncJobTimeout(environment, ['japan-abr-residential'])).toBe(36_000_000);
-    expect(syncJobTimeout(environment, ['all'])).toBe(36_000_000);
+    expect(syncJobTimeout(environment, ['JP'])).toBe(86_400_000);
+    expect(syncJobTimeout(environment, ['japan-abr-residential'])).toBe(86_400_000);
+    expect(syncJobTimeout(environment, ['all'])).toBe(86_400_000);
   });
 
   it('persists task status and rejects concurrent manual runs', async () => {

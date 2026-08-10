@@ -39,7 +39,7 @@ const hongKongResidentialExportRevision = 'bd-building-information-v1';
 const mapplsResidentialRevision = 'licensed-nearby-details-v2';
 const licensedResidentialRevision = 'licensed-feed-v2';
 const pdokBagRevision = 'strict-active-residential-coverage-round-robin-v2';
-const japanMaterializeTimeoutMs = 8 * 60 * 60_000;
+const japanMaterializeTimeoutMs = 20 * 60 * 60_000;
 export const sourceAdapterRevisions = Object.freeze({
   overture: overtureResidentialRevision,
   geofabrik: geofabrikExportRevision,

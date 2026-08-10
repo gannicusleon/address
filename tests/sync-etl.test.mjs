@@ -638,7 +638,7 @@ describe('address source shard catalog', () => {
       '--output', expect.stringContaining('buildings.parquet'), '--member', 'buildings.parquet'
     ]));
     const materializeCall = calls.find(({ phase }) => phase === 'materialize:japan-abr-residential');
-    expect(materializeCall).toMatchObject({ file: 'python-fixture', timeoutMs: 28_800_000 });
+    expect(materializeCall).toMatchObject({ file: 'python-fixture', timeoutMs: 72_000_000 });
     expect(materializeCall.args).toEqual(expect.arrayContaining([
       expect.stringContaining('japan-abr-export.py'), '--abr-url', shard.source.dataUrl,
       '--max-records', '20000', '--per-locality', '200', '--plateau-parquet',
