@@ -1,6 +1,8 @@
 import argparse
 import json
+import os
 import pathlib
+import re
 
 import duckdb
 
@@ -32,6 +34,16 @@ if not args.country.isalpha() or len(args.country) != 2:
 if args.max_records < 1 or args.per_locality < 1:
     raise ValueError("record limits must be positive")
 
+memory_limit = os.environ.get("ADDRESS_SYNC_OVERTURE_MEMORY_LIMIT", "4GB").strip().upper()
+if not re.fullmatch(r"[1-9]\d*(?:\.\d+)?(?:MB|GB)", memory_limit):
+    raise ValueError("ADDRESS_SYNC_OVERTURE_MEMORY_LIMIT must be a positive MB or GB value")
+try:
+    worker_threads = int(os.environ.get("ADDRESS_SYNC_OVERTURE_THREADS", "2"))
+except ValueError as error:
+    raise ValueError("ADDRESS_SYNC_OVERTURE_THREADS must be an integer between 1 and 8") from error
+if not 1 <= worker_threads <= 8:
+    raise ValueError("ADDRESS_SYNC_OVERTURE_THREADS must be an integer between 1 and 8")
+
 assets = json.loads(pathlib.Path(args.assets_file).read_text(encoding="utf-8"))
 if (not isinstance(assets, list)
         or (not args.candidate_jsonl and not assets)
@@ -59,7 +71,7 @@ connection = duckdb.connect()
 connection.execute(f"SET home_directory={sql_string(str(duckdb_home))}")
 connection.execute("INSTALL httpfs; LOAD httpfs; INSTALL spatial; LOAD spatial;")
 connection.execute("SET preserve_insertion_order=false")
-connection.execute("SET threads=4")
+connection.execute(f"SET threads={worker_threads}")
 connection.execute("SET enable_http_metadata_cache=true")
 connection.execute("SET http_keep_alive=true")
 connection.execute("SET http_retries=10")
@@ -67,7 +79,7 @@ connection.execute("SET http_retry_wait_ms=250")
 connection.execute("SET http_timeout=120")
 temporary_directory = output_path.parent / "duckdb-temp"
 temporary_directory.mkdir(parents=True, exist_ok=True)
-connection.execute("SET memory_limit='2GB'")
+connection.execute(f"SET memory_limit={sql_string(memory_limit)}")
 connection.execute(f"SET temp_directory={sql_string(str(temporary_directory))}")
 output = sql_string(str(output_path))
 country = sql_string(args.country.upper())

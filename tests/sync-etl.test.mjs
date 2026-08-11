@@ -1381,6 +1381,10 @@ describe('built-in ETL planning and publishing', () => {
     expect(overture).toContain('residential_locality_rank');
     expect(overture).toContain('SET http_keep_alive=true');
     expect(overture).toContain('SET http_retries=10');
+    expect(overture).toContain('ADDRESS_SYNC_OVERTURE_MEMORY_LIMIT');
+    expect(overture).toContain('ADDRESS_SYNC_OVERTURE_THREADS');
+    expect(overture).toContain('SET memory_limit={sql_string(memory_limit)}');
+    expect(overture).toContain('SET threads={worker_threads}');
     expect(openAddresses).toContain('required_mapping = {"id", "number", "street", "district", "locality", "admin1", "postcode", "longitude", "latitude"}');
     expect(openAddresses).toContain('while len(selected) < candidate_limit:');
     expect(inegiResidential).toContain('normalized(row.get("TIPODOM")) != "VIVIENDA"');
