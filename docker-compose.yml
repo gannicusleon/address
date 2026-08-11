@@ -25,7 +25,7 @@ x-app: &app
     COOKIE_SECURE: ${COOKIE_SECURE:-false}
     ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-*}
     TRUST_PROXY: ${TRUST_PROXY:-false}
-    SYNC_SCHEDULER_ENABLED: "true"
+    SYNC_SCHEDULER_ENABLED: "${SYNC_SCHEDULER_ENABLED:-false}"
   secrets: &app-secrets
     - postgres_password
     - config_master_key

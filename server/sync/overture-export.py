@@ -1,8 +1,10 @@
 import argparse
 import json
+import math
 import os
 import pathlib
 import re
+import sys
 
 import duckdb
 
@@ -88,6 +90,7 @@ if not (-180 <= minimum_longitude < maximum_longitude <= 180
         and -90 <= minimum_latitude < maximum_latitude <= 90):
     raise ValueError("bounds must be a valid minLon minLat maxLon maxLat box")
 candidate_limit = min(max(args.max_records, args.max_records * 12), 600000)
+candidate_grid_scale = 4
 
 if args.candidate_jsonl:
     candidate_file = pathlib.Path(args.candidate_jsonl).resolve()
@@ -108,9 +111,12 @@ CREATE TEMP TABLE address_candidates AS
   LIMIT {candidate_limit};
 """
 else:
+    candidate_scan_limit = min(candidate_limit * 2, 1200000)
+    per_asset_limit = max(1, math.ceil(candidate_scan_limit / len(assets)))
     asset_queries = []
     for asset in assets:
         asset_queries.append(f"""
+    SELECT * FROM (
     SELECT
       id,
       country,
@@ -141,22 +147,67 @@ else:
       AND nullif(trim(street), '') IS NOT NULL
       AND nullif(trim(number), '') IS NOT NULL
       AND geometry IS NOT NULL
+    ORDER BY hash(id)
+    LIMIT {per_asset_limit}
+    ) AS sampled_asset
 """)
     candidate_sources = "\nUNION ALL\n".join(asset_queries)
     candidate_query = f"""
-CREATE TEMP VIEW address_candidates AS
+CREATE TEMP TABLE address_candidates AS
   WITH source AS (
 {candidate_sources}
+  ), ranked AS (
+    SELECT *, row_number() OVER (
+      PARTITION BY coalesce(nullif(trim(admin1), ''), '*'),
+        coalesce(nullif(trim(locality), ''),
+          concat('grid:', floor(latitude * {candidate_grid_scale}), ':',
+            floor(longitude * {candidate_grid_scale})))
+      ORDER BY hash(id)
+    ) AS candidate_locality_rank
+    FROM source
   )
-  SELECT 0 AS priority, *
-  FROM source;
+  SELECT 0 AS priority, * EXCLUDE (candidate_locality_rank)
+  FROM ranked
+  ORDER BY candidate_locality_rank,
+    hash(coalesce(nullif(trim(admin1), ''), '*')), hash(id)
+  LIMIT {candidate_limit};
 """
 connection.execute(candidate_query)
+
+candidate_count = connection.execute("SELECT count(*) FROM address_candidates").fetchone()[0]
+if candidate_count == 0:
+    raise RuntimeError("Overture produced no bounded address candidates")
+connection.execute(f"""
+CREATE TEMP TABLE candidate_grids AS
+SELECT DISTINCT
+  CAST(floor(longitude * {candidate_grid_scale}) AS INTEGER) AS grid_longitude,
+  CAST(floor(latitude * {candidate_grid_scale}) AS INTEGER) AS grid_latitude
+FROM address_candidates;
+""")
+candidate_grids = connection.execute(
+    "SELECT grid_longitude,grid_latitude FROM candidate_grids ORDER BY grid_latitude,grid_longitude"
+).fetchall()
 
 if not building_assets:
     raise RuntimeError("Residential building classification requires building assets")
 else:
-    selected_building_assets = building_assets
+    selected_building_assets = [
+        entry["url"] for entry in building_asset_entries
+        if entry["bbox"] is None or any(
+            entry["bbox"][2] >= grid_longitude / candidate_grid_scale
+            and entry["bbox"][0] < (grid_longitude + 1) / candidate_grid_scale
+            and entry["bbox"][3] >= grid_latitude / candidate_grid_scale
+            and entry["bbox"][1] < (grid_latitude + 1) / candidate_grid_scale
+            for grid_longitude, grid_latitude in candidate_grids
+        )
+    ]
+    if not selected_building_assets:
+        raise RuntimeError("No residential building assets intersect the bounded address candidates")
+    print(
+        f"Overture {args.country.upper()} classification: candidates={candidate_count} "
+        f"grids={len(candidate_grids)} building_assets={len(selected_building_assets)}/{len(building_assets)}",
+        file=sys.stderr, flush=True
+    )
     building_asset_list = parquet_input(selected_building_assets)
     residential_classes = "(" + ",".join(sql_string(value) for value in (
         "allotment_house", "apartments", "bungalow", "cabin", "detached", "dormitory",
@@ -168,6 +219,11 @@ COPY (
   WITH residential_buildings AS (
     SELECT DISTINCT buildings.id, buildings.class, buildings.geometry, buildings.bbox
     FROM read_parquet({building_asset_list}, union_by_name=true) AS buildings
+    JOIN candidate_grids ON
+      buildings.bbox.xmax >= candidate_grids.grid_longitude / {candidate_grid_scale}
+      AND buildings.bbox.xmin < (candidate_grids.grid_longitude + 1) / {candidate_grid_scale}
+      AND buildings.bbox.ymax >= candidate_grids.grid_latitude / {candidate_grid_scale}
+      AND buildings.bbox.ymin < (candidate_grids.grid_latitude + 1) / {candidate_grid_scale}
     WHERE buildings.class IN {residential_classes}
       AND buildings.geometry IS NOT NULL
       AND buildings.bbox.xmax >= {minimum_longitude}

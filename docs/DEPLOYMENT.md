@@ -65,6 +65,7 @@ API_PORT=8787
 ALLOWED_ORIGIN=*
 TRUST_PROXY=false
 COOKIE_SECURE=false
+SYNC_SCHEDULER_ENABLED=false
 ```
 
 For production behind HTTPS, set an exact `ALLOWED_ORIGIN` and set `TRUST_PROXY` and `COOKIE_SECURE` to `true`. Manage provider API keys and ordinary business settings in the administrator console. The empty, ignored `config/address.env` is reserved for advanced licensed-feed URLs, field mappings, and license gates that must exist before the sync process starts.
@@ -74,9 +75,9 @@ For production behind HTTPS, set an exact `ALLOWED_ORIGIN` and set `TRUST_PROXY`
 - `postgres`: PostgreSQL 16 on the internal network only
 - `migrate`: runs database migrations once before application startup
 - `api`: WebUI and API, bound to `127.0.0.1:8787` by default
-- `sync`: automatic synchronization on the private Compose network
+- `sync`: manual synchronization on the private Compose network
 
-Automatic synchronization is enabled by default. Queue discovery, timeouts, bounded retries, cooldowns, source exhaustion, and temporary-file cleanup are handled by the service.
+Automatic synchronization is disabled by default. The administrator console and sync-control API can trigger selected countries manually. Set `SYNC_SCHEDULER_ENABLED=true` explicitly to resume incomplete initialization automatically and enable the daily scheduling queue.
 
 ## Operations
 

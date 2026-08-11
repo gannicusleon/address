@@ -34,6 +34,12 @@ const deferred = () => {
 };
 
 describe('address sync coordinator', () => {
+  it('keeps Docker Compose synchronization manual unless explicitly enabled', async () => {
+    const compose = await readFile('docker-compose.yml', 'utf8');
+    expect(compose).toContain('SYNC_SCHEDULER_ENABLED: "${SYNC_SCHEDULER_ENABLED:-false}"');
+    expect(compose).not.toContain('SYNC_SCHEDULER_ENABLED: "true"');
+  });
+
   it('reserves a longer hard deadline only for jobs that include Japan', () => {
     const environment = { SYNC_JOB_TIMEOUT_MS: '14400000' };
     expect(syncJobTimeout(environment, ['CA'])).toBe(14_400_000);

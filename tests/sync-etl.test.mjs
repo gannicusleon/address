@@ -1345,7 +1345,7 @@ describe('source record normalization', () => {
 });
 
 describe('built-in ETL planning and publishing', () => {
-  it('matches all Overture candidates before limiting and supports OSM multipolygon buildings', async () => {
+  it('bounds and balances Overture candidates before residential matching and supports OSM multipolygon buildings', async () => {
     const overture = (await readFile('server/sync/overture-export.py', 'utf8')).replace(/\r\n/g, '\n');
     const geofabrik = (await readFile('server/sync/geofabrik-export.py', 'utf8')).replace(/\r\n/g, '\n');
     const japanAbr = (await readFile('server/sync/japan-abr-export.py', 'utf8')).replace(/\r\n/g, '\n');
@@ -1354,8 +1354,13 @@ describe('built-in ETL planning and publishing', () => {
     const adapterSource = (await readFile('server/sync/source-adapters.mjs', 'utf8')).replace(/\r\n/g, '\n');
     expect(geofabrik).not.toContain('--communities-file');
     expect(overture).toContain('candidate_limit');
-    expect(overture).toContain('CREATE TEMP VIEW address_candidates AS');
+    expect(overture).toContain('candidate_scan_limit');
+    expect(overture).toContain('per_asset_limit');
+    expect(overture).toContain('CREATE TEMP TABLE address_candidates AS');
     expect(overture).toContain('candidate_sources = "\\nUNION ALL\\n".join(asset_queries)');
+    expect(overture).toContain('candidate_locality_rank');
+    expect(overture).toContain('LIMIT {candidate_limit}');
+    expect(overture).toContain('CREATE TEMP TABLE candidate_grids AS');
     expect(overture).toContain('AND bbox.xmin >= {minimum_longitude}');
     expect(overture).toContain('AND bbox.ymax <= {maximum_latitude}');
     expect(overture).toContain('--building-assets-file');
@@ -1365,7 +1370,7 @@ describe('built-in ETL planning and publishing', () => {
     expect(overture).not.toContain('residential_probe_limit');
     expect(overture).not.toContain('residential_grid_limit');
     expect(overture).not.toContain('residential_grid_scale');
-    expect(overture).not.toContain('JOIN residential_grids ON');
+    expect(overture).toContain('JOIN candidate_grids ON');
     expect(overture).toContain("list_transform(address_levels");
     expect(overture).toContain("coalesce(address_levels[-1].value, '') AS district");
     expect(overture).not.toContain('AND bbox.xmax >= {minimum_longitude}');
@@ -1385,6 +1390,7 @@ describe('built-in ETL planning and publishing', () => {
     expect(overture).toContain('ADDRESS_SYNC_OVERTURE_THREADS');
     expect(overture).toContain('SET memory_limit={sql_string(memory_limit)}');
     expect(overture).toContain('SET threads={worker_threads}');
+    expect(adapterSource).toContain("residential-buildings-v6");
     expect(openAddresses).toContain('required_mapping = {"id", "number", "street", "district", "locality", "admin1", "postcode", "longitude", "latitude"}');
     expect(openAddresses).toContain('while len(selected) < candidate_limit:');
     expect(inegiResidential).toContain('normalized(row.get("TIPODOM")) != "VIVIENDA"');

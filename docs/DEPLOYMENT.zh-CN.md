@@ -65,6 +65,7 @@ API_PORT=8787
 ALLOWED_ORIGIN=*
 TRUST_PROXY=false
 COOKIE_SECURE=false
+SYNC_SCHEDULER_ENABLED=false
 ```
 
 HTTPS 反向代理生产环境应设置准确的 `ALLOWED_ORIGIN`，并将 `TRUST_PROXY`、`COOKIE_SECURE` 改为 `true`。第三方 API Key 和常规业务参数统一在管理员后台管理。默认空白且被忽略的 `config/address.env` 只保留给同步进程启动前必须存在的授权 feed URL、字段映射和许可门禁。
@@ -74,9 +75,10 @@ HTTPS 反向代理生产环境应设置准确的 `ALLOWED_ORIGIN`，并将 `TRUS
 - `postgres`：PostgreSQL 16，只连接内部网络
 - `migrate`：每次启动前执行一次数据库迁移，成功后退出
 - `api`：WebUI 与 API，默认只监听 `127.0.0.1:8787`
-- `sync`：自动同步服务，只连接 Compose 私有网络
+- `sync`：手动同步服务，只连接 Compose 私有网络
 
-自动同步默认启用，队列发现、超时、有限重试、冷却、来源耗尽与临时文件清理由服务自动处理。
+自动同步默认关闭，管理员后台和同步控制 API 可以手动触发指定国家。只有显式设置
+`SYNC_SCHEDULER_ENABLED=true` 时，服务才会自动补跑未完成的初始化并启用每日调度队列。
 
 ## 常用命令
 
