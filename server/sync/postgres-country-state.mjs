@@ -154,7 +154,9 @@ export class PostgresCountryStateStore {
       const shardRows = (await this.database.prepare(`SELECT status,last_success_at,next_sync_at,failure_count,
         last_error,source_version,failure_code,failure_signature,updated_at FROM sync_shard_state
         WHERE country_code=? ORDER BY updated_at DESC`).bind(countryCode).all()).results;
-      const failed = shardRows.find((row) => row.status === 'failed');
+      const hasReady = shardRows.some((row) => row.status === 'ready');
+      const blockingFailure = shardRows.find((row) => row.status === 'failed'
+        && !(row.failure_code === 'SOURCE_QUALITY_FAILED' && hasReady));
       const latestVersion = shardRows.find((row) => row.source_version);
       const datasetId = await this.database.prepare(`SELECT id FROM address_datasets
         WHERE country_code=? AND status='active' ORDER BY imported_at DESC LIMIT 1`).bind(countryCode).first('id');
@@ -162,14 +164,16 @@ export class PostgresCountryStateStore {
         SUM(CASE WHEN property_type IN ('residential','apartment') THEN 1 ELSE 0 END) AS residential_count
         FROM address_pool WHERE country_code=? AND active=1`).bind(countryCode).first();
       const minimum = (column) => shardRows.map((row) => row[column]).filter(Boolean).sort()[0] || null;
-      const status = failed ? 'failed' : shardRows.length && shardRows.every((row) => row.status === 'ready') ? 'ready' : 'pending';
+      const allSourcesResolved = shardRows.every((row) => row.status === 'ready'
+        || (row.status === 'failed' && row.failure_code === 'SOURCE_QUALITY_FAILED' && hasReady));
+      const status = blockingFailure ? 'failed' : allSourcesResolved && hasReady ? 'ready' : 'pending';
       await this.database.prepare(`UPDATE sync_country_state SET status=?,last_success_at=?,next_sync_at=?,
         active_dataset_id=?,address_count=?,residential_count=?,failure_count=?,last_error=?,source_version=?,
         failure_code=?,failure_signature=?,updated_at=? WHERE country_code=?`).bind(
         status, minimum('last_success_at'), minimum('next_sync_at'), datasetId || null,
         Number(counts?.address_count || 0), Number(counts?.residential_count || 0),
-        shardRows.reduce((total, row) => total + Number(row.failure_count || 0), 0), failed?.last_error || null,
-        latestVersion?.source_version || null, failed?.failure_code || null, failed?.failure_signature || null,
+        shardRows.reduce((total, row) => total + Number(row.failure_count || 0), 0), blockingFailure?.last_error || null,
+        latestVersion?.source_version || null, blockingFailure?.failure_code || null, blockingFailure?.failure_signature || null,
         shardRows[0]?.updated_at || updatedAt, countryCode
       ).run();
     }

@@ -692,6 +692,7 @@ export const runAddressEtl = async ({
   const changedCountries = new Set();
   const plannedRawArtifacts = new Set();
   const disabledCountries = new Set();
+  const successfulCountries = new Set();
   const syncErrors = [];
   const failureReport = (task, error) => {
     const errorCode = error?.code || (estimate ? 'SOURCE_ESTIMATE_FAILED' : 'SYNC_FAILED');
@@ -728,7 +729,9 @@ export const runAddressEtl = async ({
       state.shards[task.shard.id] = report;
       await stateStore.save({ ...state, updatedAt: checkedAt.toISOString() });
     }
-    if (syncMode === 'initial' || syncMode === 'manual') syncErrors.push(error);
+    if (syncMode === 'initial' || syncMode === 'manual') {
+      syncErrors.push({ countryCode: task.shard.countryCode, error });
+    }
     else if (!estimate) throw error;
   };
   try {
@@ -844,6 +847,7 @@ export const runAddressEtl = async ({
         plannedCacheBytes = await directorySize(cacheDir);
         plannedStorageBytes = await measureStorage([dataRoot]);
         changed ||= !imported.skipped;
+        successfulCountries.add(task.shard.countryCode);
         if (!imported.skipped) changedCountries.add(task.shard.countryCode);
         reports.push(task.report);
         console.log(`[address-sync] ${task.shard.countryCode} ready addresses=${imported.acceptedCount} target=${task.report.targetCount} deficit=${task.report.deficit}`);
@@ -893,7 +897,19 @@ export const runAddressEtl = async ({
         console.log(`[address-sync] ${countryCode} coverage mapped=${coverage.matchedAddresses} unmatched=${coverage.unmatchedAddresses}`);
       }
     }
-    if (syncErrors.length) throw new AggregateError(syncErrors, `Address sync failed for ${syncErrors.length} country shard(s)`);
+    const blockingSyncErrors = syncErrors.filter(({ countryCode, error }) =>
+      error?.code !== 'SOURCE_QUALITY_FAILED' || !successfulCountries.has(countryCode));
+    for (const { countryCode, error } of syncErrors) {
+      if (error?.code === 'SOURCE_QUALITY_FAILED' && successfulCountries.has(countryCode)) {
+        console.warn(`[address-sync] ${countryCode} source-quality failure retained; another source succeeded`);
+      }
+    }
+    if (blockingSyncErrors.length) {
+      throw new AggregateError(
+        blockingSyncErrors.map(({ error }) => error),
+        `Address sync failed for ${blockingSyncErrors.length} country shard(s)`
+      );
+    }
     if (syncMode === 'initial' && requireResidential) {
       const missingResidential = requested.filter((shard) => !disabledCountries.has(shard.countryCode)
         && Number(state.shards[shard.id]?.residentialCount || 0) < 1);

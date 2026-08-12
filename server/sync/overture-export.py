@@ -181,7 +181,13 @@ connection.execute(candidate_query)
 
 candidate_count = connection.execute("SELECT count(*) FROM address_candidates").fetchone()[0]
 if candidate_count == 0:
-    raise RuntimeError("Overture produced no bounded address candidates")
+    output_path.write_text("", encoding="utf-8")
+    print(
+        f"Overture {args.country.upper()} has no address candidates satisfying the required fields",
+        file=sys.stderr, flush=True
+    )
+    connection.close()
+    sys.exit(0)
 connection.execute(f"""
 CREATE TEMP TABLE candidate_grids AS
 SELECT DISTINCT

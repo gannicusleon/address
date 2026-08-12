@@ -194,6 +194,36 @@ describe('country sync planning', () => {
     });
   });
 
+  it('retains an unavailable source diagnostic without failing a country whose other source succeeds', async () => {
+    const cacheDir = resolve('.data-cache', 'country-plan-tests', randomUUID());
+    directories.push(cacheDir);
+    const countryShards = ['overture', 'geofabrik'].map((sourceId) => ({
+      id: `${sourceId}-it`, countryCode: 'IT', intervalDays: 30, source: { id: sourceId }
+    }));
+    const result = await runAddressEtl({
+      cacheDir, dataRoot: cacheDir, syncMode: 'manual', maxRecords: 1, measureStorage: async () => 0,
+      catalog: { schemaVersion: 1, shards: countryShards },
+      adapters: {
+        discover: async (shard) => ({ adapter: shard.source.id, version: 'fixture-v1', sourceBytes: 0 }),
+        materialize: async () => ({
+          file: resolve(cacheDir, 'fixture.jsonl'), format: 'overture-jsonl', checksum: 'a'.repeat(64), cacheBytes: 0
+        })
+      },
+      importer: { importShard: async ({ shard, discovery }) => {
+        if (shard.source.id === 'overture') {
+          throw Object.assign(new Error('Overture produced no valid addresses'), {
+            code: 'SOURCE_QUALITY_FAILED', failureSignature: discovery.failureSignature
+          });
+        }
+        return { datasetId: 'geofabrik-it-v1', acceptedCount: 1, rejectedCount: 0, residentialCount: 1, skipped: false };
+      } }
+    });
+    expect(result.reports).toEqual(expect.arrayContaining([
+      expect.objectContaining({ shardId: 'overture-it', status: 'failed', errorCode: 'SOURCE_QUALITY_FAILED' }),
+      expect.objectContaining({ shardId: 'geofabrik-it', status: 'imported', acceptedCount: 1 })
+    ]));
+  });
+
   it('persists 30-day country state in PostgreSQL without double-counting repeated failures', async () => {
     const database = openTestDatabase(':memory:');
     const store = new PostgresCountryStateStore({ database, shards });
@@ -250,6 +280,32 @@ describe('country sync planning', () => {
     } });
     expect(await database.prepare('SELECT status FROM sync_country_state WHERE country_code=?').bind('US').first('status'))
       .toBe('ready');
+    database.close();
+  });
+
+  it('keeps a country ready when one source is unavailable but another source is ready', async () => {
+    const database = openTestDatabase(':memory:');
+    const countryShards = [
+      { id: 'overture-it', countryCode: 'IT', intervalDays: 30 },
+      { id: 'geofabrik-it', countryCode: 'IT', intervalDays: 30 }
+    ];
+    const store = new PostgresCountryStateStore({ database, shards: countryShards });
+    await store.save({ schemaVersion: 1, shards: {
+      'overture-it': {
+        shardId: 'overture-it', countryCode: 'IT', intervalDays: 30, status: 'failed',
+        lastChecked: '2026-08-12T00:00:00.000Z', error: 'no compatible records',
+        errorCode: 'SOURCE_QUALITY_FAILED', failureSignature: 'fixture-signature'
+      },
+      'geofabrik-it': {
+        shardId: 'geofabrik-it', countryCode: 'IT', intervalDays: 30, status: 'imported',
+        lastSuccessfulAt: '2026-08-12T00:01:00.000Z', lastChecked: '2026-08-12T00:01:00.000Z',
+        acceptedCount: 100, residentialCount: 100
+      }
+    } });
+    expect(await database.prepare(`SELECT status,last_error,failure_code FROM sync_country_state
+      WHERE country_code=?`).bind('IT').first()).toEqual({ status: 'ready', last_error: null, failure_code: null });
+    expect(await database.prepare(`SELECT status,failure_code FROM sync_shard_state
+      WHERE shard_id=?`).bind('overture-it').first()).toEqual({ status: 'failed', failure_code: 'SOURCE_QUALITY_FAILED' });
     database.close();
   });
 
