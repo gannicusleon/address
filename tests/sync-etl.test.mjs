@@ -1529,6 +1529,14 @@ describe('built-in ETL planning and publishing', () => {
     expect(await database.prepare("SELECT source_record_id FROM address_pool_evidence WHERE evidence_type='residential_use'").first('source_record_id'))
       .toBe('building-1');
     expect(await database.prepare('SELECT COUNT(*) AS count FROM pool_coverage').first('count')).toBe(1);
+    const cachedRetry = await importer.importShard({
+      shard: { id: 'fixture-us', countryCode: 'US', source },
+      discovery: { version: '2026-06-17.0', publishedAt: '2026-06-17T00:00:00Z', dataUrl: source.dataUrl, sourceBytes: 1234 },
+      materialized: { file, format: 'overture-jsonl', checksum: 'b'.repeat(64), cacheBytes: 321 },
+      maxRecords: 10,
+      perLocality: 2
+    });
+    expect(cachedRetry).toMatchObject({ acceptedCount: 1, residentialCount: 1, skipped: true });
     const aliasRetry = await importer.importShard({
       shard: { id: 'legacy-fixture-us', countryCode: 'US', source },
       discovery: { version: '2026-06-17.0', publishedAt: '2026-06-17T00:00:00Z', dataUrl: source.dataUrl, sourceBytes: 1234 },

@@ -406,6 +406,7 @@ export class PostgresAddressImporter {
       return {
         datasetId,
         acceptedCount: Number(existing.active_count),
+        residentialCount: Number(existing.active_count),
         rejectedCount: Number(existing.rejected_count),
         rejectionReasons: {},
         metrics: null,
