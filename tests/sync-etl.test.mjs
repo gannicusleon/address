@@ -479,6 +479,27 @@ describe('address source shard catalog', () => {
     expect(disabled.buildingAssets).toEqual([]);
   });
 
+  it('passes the shared country postcode rule into Overture materialization', async () => {
+    const cacheDir = resolve('.data-cache', `overture-postcode-${process.pid}-${Date.now()}`);
+    directories.push(cacheDir);
+    const calls = [];
+    const adapters = createSourceAdapters({
+      execute: async (call) => {
+        calls.push(call);
+        await writeFile(call.args[call.args.indexOf('--output') + 1], '{}\n');
+      },
+      pythonBin: 'python-fixture'
+    });
+    const shard = { id: 'overture-addresses-it', countryCode: 'IT', source };
+    await adapters.materialize(shard, {
+      adapter: 'overture', version: 'fixture', assets: ['https://example.test/address.parquet'],
+      buildingAssets: ['https://example.test/building.parquet']
+    }, { cacheDir, maxRecords: 150000, perLocality: 2500 });
+    expect(calls[0].args).toEqual(expect.arrayContaining([
+      '--postcode-pattern', '^\\d{5}$', '--max-records', '150000'
+    ]));
+  });
+
   it('reads one or many OpenAddresses archive members with cross-member deduplication', async () => {
     const cacheDir = resolve('.data-cache', `openaddresses-members-${process.pid}-${Date.now()}`);
     directories.push(cacheDir);
@@ -1215,6 +1236,16 @@ describe('source record normalization', () => {
     expect(record.components).toMatchObject({ admin1: 'Sardegna', locality: 'Teulada', district: 'Sud Sardegna' });
   });
 
+  it('does not duplicate an Italian municipality into the district field', () => {
+    const record = normalizeSourceRecord({
+      id: 'overture-it-duplicate', country: 'IT', address_levels: ['Friuli-Venezia Giulia', 'Trieste', 'Trieste'],
+      postcode: '34121', street: 'Via dei Fornelli', number: '1', longitude: 13.77, latitude: 45.65
+    }, { id: 'fixture-it', countryCode: 'IT', source }, 'overture-jsonl');
+    expect(record.components).toMatchObject({
+      admin1: 'Friuli-Venezia Giulia', locality: 'Trieste', district: ''
+    });
+  });
+
   it('uses the containing OSM building as independent residential evidence', () => {
     const record = normalizeSourceRecord({
       id: 'node/9', geometry: { type: 'Point', coordinates: [-75.16, 39.95] },
@@ -1370,7 +1401,11 @@ describe('built-in ETL planning and publishing', () => {
     expect(overture).not.toContain('residential_probe_limit');
     expect(overture).not.toContain('residential_grid_limit');
     expect(overture).not.toContain('residential_grid_scale');
-    expect(overture).toContain('JOIN candidate_grids ON');
+    expect(overture).toContain('SEMI JOIN candidate_grids ON');
+    expect(overture).toContain('candidate_grid_scale = 100');
+    expect(overture).toContain('candidate_limit = args.max_records');
+    expect(overture).toContain('regexp_full_match(coalesce(trim(postcode)');
+    expect(overture).toContain('CREATE TEMP TABLE residential_buildings AS');
     expect(overture).toContain("list_transform(address_levels");
     expect(overture).toContain("coalesce(address_levels[-1].value, '') AS district");
     expect(overture).not.toContain('AND bbox.xmax >= {minimum_longitude}');
@@ -1390,7 +1425,7 @@ describe('built-in ETL planning and publishing', () => {
     expect(overture).toContain('ADDRESS_SYNC_OVERTURE_THREADS');
     expect(overture).toContain('SET memory_limit={sql_string(memory_limit)}');
     expect(overture).toContain('SET threads={worker_threads}');
-    expect(adapterSource).toContain("residential-buildings-v6");
+    expect(adapterSource).toContain("residential-buildings-v7");
     expect(openAddresses).toContain('required_mapping = {"id", "number", "street", "district", "locality", "admin1", "postcode", "longitude", "latitude"}');
     expect(openAddresses).toContain('while len(selected) < candidate_limit:');
     expect(inegiResidential).toContain('normalized(row.get("TIPODOM")) != "VIVIENDA"');

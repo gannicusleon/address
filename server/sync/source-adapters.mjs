@@ -9,6 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { runProcess } from './process.mjs';
+import { postcodePatterns } from '../../src/domain/postcode-patterns.mjs';
 
 const syncRoot = resolve(fileURLToPath(new URL('.', import.meta.url)));
 const catalogFile = resolve(syncRoot, 'source-shards.json');
@@ -25,7 +26,7 @@ const capeTownResidentialExporter = resolve(syncRoot, 'south-africa-cape-town-ex
 const taiwanResidentialExporter = resolve(syncRoot, 'taiwan-residential-export.py');
 const hongKongResidentialExporter = resolve(syncRoot, 'hong-kong-residential-export.py');
 const licensedResidentialExporter = resolve(syncRoot, 'licensed-residential-export.py');
-const overtureResidentialRevision = 'residential-buildings-v6';
+const overtureResidentialRevision = 'residential-buildings-v7';
 const geofabrikExportRevision = 'g70';
 const japanAbrExportRevision = 'abr-rsdt-plateau-osm-chiban-v10';
 const singaporeHdbExportRevision = 'hdb-property-building-onemap-v2';
@@ -1382,12 +1383,14 @@ export const createSourceAdapters = ({
     await writeFile(assetsFile, JSON.stringify(discovery.assets), 'utf8');
     await writeFile(buildingAssetsFile, JSON.stringify(discovery.buildingAssetEntries || discovery.buildingAssets || []), 'utf8');
     try {
+      const postcodePattern = postcodePatterns[shard.countryCode]?.source;
       await runExecute({
         file: pythonBin,
         args: [overtureExporter, '--country', shard.countryCode, '--release', discovery.version,
           '--output', temporary, '--max-records', String(options.maxRecords),
           '--per-locality', String(options.perLocality), '--assets-file', assetsFile,
           '--building-assets-file', buildingAssetsFile,
+          ...(postcodePattern ? ['--postcode-pattern', postcodePattern] : []),
           '--bounds', ...((shard.bounds || countryBounds[shard.countryCode]).map(String))],
         phase: `materialize:${shard.id}`
       });

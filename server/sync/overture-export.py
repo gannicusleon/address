@@ -29,6 +29,7 @@ parser.add_argument("--assets-file", required=True)
 parser.add_argument("--building-assets-file", required=True)
 parser.add_argument("--bounds", type=float, nargs=4, required=True)
 parser.add_argument("--candidate-jsonl")
+parser.add_argument("--postcode-pattern")
 args = parser.parse_args()
 
 if not args.country.isalpha() or len(args.country) != 2:
@@ -89,8 +90,10 @@ minimum_longitude, minimum_latitude, maximum_longitude, maximum_latitude = args.
 if not (-180 <= minimum_longitude < maximum_longitude <= 180
         and -90 <= minimum_latitude < maximum_latitude <= 90):
     raise ValueError("bounds must be a valid minLon minLat maxLon maxLat box")
-candidate_limit = min(max(args.max_records, args.max_records * 12), 600000)
-candidate_grid_scale = 4
+candidate_limit = args.max_records
+candidate_grid_scale = 100
+postcode_filter = ("TRUE" if not args.postcode_pattern else
+                   f"regexp_full_match(coalesce(trim(postcode), ''), {sql_string(args.postcode_pattern)})")
 
 if args.candidate_jsonl:
     candidate_file = pathlib.Path(args.candidate_jsonl).resolve()
@@ -106,12 +109,13 @@ CREATE TEMP TABLE address_candidates AS
     ST_Point(longitude, latitude) AS geometry
   FROM read_json_auto({sql_string(str(candidate_file))}, format='newline_delimited')
   WHERE country = {country}
+    AND {postcode_filter}
     AND longitude BETWEEN {minimum_longitude} AND {maximum_longitude}
     AND latitude BETWEEN {minimum_latitude} AND {maximum_latitude}
   LIMIT {candidate_limit};
 """
 else:
-    candidate_scan_limit = min(candidate_limit * 2, 1200000)
+    candidate_scan_limit = min(candidate_limit * 2, 600000)
     per_asset_limit = max(1, math.ceil(candidate_scan_limit / len(assets)))
     asset_queries = []
     for asset in assets:
@@ -140,6 +144,7 @@ else:
       geometry
     FROM read_parquet({sql_string(asset)}, union_by_name=true)
     WHERE country = {country}
+      AND {postcode_filter}
       AND bbox.xmin >= {minimum_longitude}
       AND bbox.xmax <= {maximum_longitude}
       AND bbox.ymin >= {minimum_latitude}
@@ -214,23 +219,36 @@ else:
         "dwelling_house", "ger", "house", "houseboat", "residential", "semi",
         "semidetached_house", "static_caravan", "stilt_house", "terrace", "trullo"
     )) + ")"
+    connection.execute(f"""
+CREATE TEMP TABLE residential_buildings AS
+SELECT buildings.id, buildings.class, buildings.geometry, buildings.bbox
+FROM read_parquet({building_asset_list}, union_by_name=true) AS buildings
+SEMI JOIN candidate_grids ON
+  candidate_grids.grid_longitude BETWEEN
+    CAST(floor(buildings.bbox.xmin * {candidate_grid_scale}) AS INTEGER)
+    AND CAST(floor(buildings.bbox.xmax * {candidate_grid_scale}) AS INTEGER)
+  AND candidate_grids.grid_latitude BETWEEN
+    CAST(floor(buildings.bbox.ymin * {candidate_grid_scale}) AS INTEGER)
+    AND CAST(floor(buildings.bbox.ymax * {candidate_grid_scale}) AS INTEGER)
+WHERE buildings.class IN {residential_classes}
+  AND buildings.geometry IS NOT NULL
+  AND buildings.bbox.xmax >= {minimum_longitude}
+  AND buildings.bbox.xmin <= {maximum_longitude}
+  AND buildings.bbox.ymax >= {minimum_latitude}
+  AND buildings.bbox.ymin <= {maximum_latitude};
+""")
+    residential_building_count = connection.execute(
+        "SELECT count(*) FROM residential_buildings"
+    ).fetchone()[0]
+    if residential_building_count == 0:
+        raise RuntimeError("No residential buildings intersect the bounded address candidate cells")
+    print(
+        f"Overture {args.country.upper()} buildings: filtered={residential_building_count}",
+        file=sys.stderr, flush=True
+    )
     classified_query = f"""
 COPY (
-  WITH residential_buildings AS (
-    SELECT DISTINCT buildings.id, buildings.class, buildings.geometry, buildings.bbox
-    FROM read_parquet({building_asset_list}, union_by_name=true) AS buildings
-    JOIN candidate_grids ON
-      buildings.bbox.xmax >= candidate_grids.grid_longitude / {candidate_grid_scale}
-      AND buildings.bbox.xmin < (candidate_grids.grid_longitude + 1) / {candidate_grid_scale}
-      AND buildings.bbox.ymax >= candidate_grids.grid_latitude / {candidate_grid_scale}
-      AND buildings.bbox.ymin < (candidate_grids.grid_latitude + 1) / {candidate_grid_scale}
-    WHERE buildings.class IN {residential_classes}
-      AND buildings.geometry IS NOT NULL
-      AND buildings.bbox.xmax >= {minimum_longitude}
-      AND buildings.bbox.xmin <= {maximum_longitude}
-      AND buildings.bbox.ymax >= {minimum_latitude}
-      AND buildings.bbox.ymin <= {maximum_latitude}
-  ), matches AS (
+  WITH matches AS (
     SELECT
       address_candidates.id AS address_id,
       residential_buildings.id AS building_id,

@@ -402,6 +402,7 @@ export const normalizeSourceRecord = (value, shard, format) => {
     } else {
       postalLocality = postalCity;
     }
+    if (district && [admin1, locality, postalLocality].some((value) => clean(value) === clean(district))) district = '';
     postcode = shard.countryCode === 'CN' ? '' : clean(value.postcode);
     street = clean(value.street);
     houseNumber = clean(value.number).normalize('NFKC');
