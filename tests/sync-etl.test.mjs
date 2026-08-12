@@ -496,7 +496,7 @@ describe('address source shard catalog', () => {
       buildingAssets: ['https://example.test/building.parquet']
     }, { cacheDir, maxRecords: 150000, perLocality: 2500 });
     expect(calls[0].args).toEqual(expect.arrayContaining([
-      '--postcode-pattern', '^\\d{5}$', '--max-records', '150000'
+      '--postcode-pattern', '^\\d{5}$', '--max-records', '150000', '--candidate-records', '240000'
     ]));
   });
 
@@ -1397,15 +1397,22 @@ describe('built-in ETL planning and publishing', () => {
     expect(overture).toContain('--building-assets-file');
     expect(overture).toContain('--candidate-jsonl');
     expect(overture).toContain("FROM read_json_auto({sql_string(str(candidate_file))}");
-    expect(overture).toContain('ST_Intersects(address_candidates.geometry, residential_buildings.geometry)');
+    expect(overture).toContain('ST_Intersects(address_candidates.geometry, residential_building_cells.geometry)');
     expect(overture).not.toContain('residential_probe_limit');
     expect(overture).not.toContain('residential_grid_limit');
     expect(overture).not.toContain('residential_grid_scale');
-    expect(overture).toContain('SEMI JOIN candidate_grids ON');
-    expect(overture).toContain('candidate_grid_scale = 100');
-    expect(overture).toContain('candidate_limit = args.max_records');
+    expect(overture).toContain('JOIN candidate_grids USING (grid_longitude, grid_latitude)');
+    expect(overture).toContain('candidate_grid_scale = 500');
+    expect(overture).toContain('candidate_limit = args.candidate_records or args.max_records');
+    expect(overture).toContain('maximum_building_grid_cells = 256');
+    expect(overture).toContain('CREATE TEMP TABLE bounded_residential_buildings AS');
+    expect(overture).toContain('unnest(range(minimum_grid_longitude, maximum_grid_longitude + 1))');
+    expect(overture).toContain('address_candidates.grid_longitude = residential_building_cells.grid_longitude');
+    expect(overture).toContain('oversized_fallback={oversized_building_count}');
+    expect(overture).toContain('JOIN bounded_residential_buildings AS oversized_buildings');
+    expect(overture).toContain('FROM ranked_matches');
     expect(overture).toContain('regexp_full_match(coalesce(trim(postcode)');
-    expect(overture).toContain('CREATE TEMP TABLE residential_buildings AS');
+    expect(overture).toContain('CREATE TEMP TABLE residential_building_cells AS');
     expect(overture).toContain("list_transform(address_levels");
     expect(overture).toContain("coalesce(address_levels[-1].value, '') AS district");
     expect(overture).not.toContain('AND bbox.xmax >= {minimum_longitude}');
@@ -1426,7 +1433,7 @@ describe('built-in ETL planning and publishing', () => {
     expect(overture).toContain('SET memory_limit={sql_string(memory_limit)}');
     expect(overture).toContain('SET threads={worker_threads}');
     expect(overture).toContain('output_path.write_text("", encoding="utf-8")');
-    expect(adapterSource).toContain("residential-buildings-v8");
+    expect(adapterSource).toContain("residential-buildings-v9");
     expect(openAddresses).toContain('required_mapping = {"id", "number", "street", "district", "locality", "admin1", "postcode", "longitude", "latitude"}');
     expect(openAddresses).toContain('while len(selected) < candidate_limit:');
     expect(inegiResidential).toContain('normalized(row.get("TIPODOM")) != "VIVIENDA"');
@@ -1635,7 +1642,7 @@ describe('built-in ETL planning and publishing', () => {
     database.close();
   });
 
-  it('rejects a sharply degraded candidate snapshot and preserves the active pool', async () => {
+  it('rejects a sharply degraded same-method snapshot and permits a revised materialization method', async () => {
     const directory = resolve('.data-cache', 'sync-etl-tests', randomUUID());
     directories.push(directory);
     await mkdir(directory, { recursive: true });
@@ -1665,12 +1672,14 @@ describe('built-in ETL planning and publishing', () => {
     } };
     const first = await importer.importShard({
       shard, discovery: { version: 'v1', dataUrl: source.dataUrl },
-      materialized: { file, format: 'overture-jsonl', checksum: '1'.repeat(64) }, maxRecords: 10, perLocality: 10
+      materialized: { file, format: 'overture-jsonl', checksum: '1'.repeat(64), methodRevision: 'method-v8' },
+      maxRecords: 10, perLocality: 10
     });
     await writeFile(file, `${JSON.stringify(rows[0])}\n`, 'utf8');
     await expect(importer.importShard({
       shard, discovery: { version: 'v2', dataUrl: source.dataUrl },
-      materialized: { file, format: 'overture-jsonl', checksum: '2'.repeat(64) }, maxRecords: 10, perLocality: 10
+      materialized: { file, format: 'overture-jsonl', checksum: '2'.repeat(64), methodRevision: 'method-v8' },
+      maxRecords: 10, perLocality: 10
     })).rejects.toMatchObject({
       code: 'SNAPSHOT_QUALITY_FAILED',
       rejectionReasons: {},
@@ -1679,10 +1688,10 @@ describe('built-in ETL planning and publishing', () => {
     expect(await database.prepare("SELECT id FROM address_datasets WHERE status='active'").first('id')).toBe(first.datasetId);
     expect(await database.prepare('SELECT COUNT(*) count FROM address_pool_runtime').first('count')).toBe(4);
 
-    await database.prepare("UPDATE address_datasets SET version='v1-legacy-import-revision' WHERE id=?").bind(first.datasetId).run();
     const revised = await importer.importShard({
       shard, discovery: { version: 'v3', dataUrl: source.dataUrl },
-      materialized: { file, format: 'overture-jsonl', checksum: '3'.repeat(64) }, maxRecords: 10, perLocality: 10
+      materialized: { file, format: 'overture-jsonl', checksum: '3'.repeat(64), methodRevision: 'method-v9' },
+      maxRecords: 10, perLocality: 10
     });
     expect(revised).toMatchObject({ acceptedCount: 1, skipped: false });
     expect(await database.prepare("SELECT id FROM address_datasets WHERE status='active'").first('id')).toBe(revised.datasetId);

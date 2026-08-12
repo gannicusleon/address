@@ -26,7 +26,7 @@ const capeTownResidentialExporter = resolve(syncRoot, 'south-africa-cape-town-ex
 const taiwanResidentialExporter = resolve(syncRoot, 'taiwan-residential-export.py');
 const hongKongResidentialExporter = resolve(syncRoot, 'hong-kong-residential-export.py');
 const licensedResidentialExporter = resolve(syncRoot, 'licensed-residential-export.py');
-const overtureResidentialRevision = 'residential-buildings-v8';
+const overtureResidentialRevision = 'residential-buildings-v9';
 const geofabrikExportRevision = 'g70';
 const japanAbrExportRevision = 'abr-rsdt-plateau-osm-chiban-v10';
 const singaporeHdbExportRevision = 'hdb-property-building-onemap-v2';
@@ -1374,7 +1374,8 @@ export const createSourceAdapters = ({
       `${shard.id}-${safeVersion(discovery.version)}${residentialRevision}-${policyIdentity}.jsonl`);
     try {
       const size = (await stat(output)).size;
-      return { file: output, format: 'overture-jsonl', cacheBytes: size, checksum: await sha256File(output), cacheHit: true };
+      return { file: output, format: 'overture-jsonl', cacheBytes: size, checksum: await sha256File(output),
+        cacheHit: true, methodRevision: overtureResidentialRevision };
     } catch {}
     await mkdir(resolve(options.cacheDir, 'normalized'), { recursive: true });
     const temporary = `${output}.${process.pid}.tmp`;
@@ -1384,10 +1385,12 @@ export const createSourceAdapters = ({
     await writeFile(buildingAssetsFile, JSON.stringify(discovery.buildingAssetEntries || discovery.buildingAssets || []), 'utf8');
     try {
       const postcodePattern = postcodePatterns[shard.countryCode]?.source;
+      const candidateRecords = Math.min(240_000, Math.ceil(options.maxRecords * 1.6));
       await runExecute({
         file: pythonBin,
         args: [overtureExporter, '--country', shard.countryCode, '--release', discovery.version,
           '--output', temporary, '--max-records', String(options.maxRecords),
+          '--candidate-records', String(candidateRecords),
           '--per-locality', String(options.perLocality), '--assets-file', assetsFile,
           '--building-assets-file', buildingAssetsFile,
           ...(postcodePattern ? ['--postcode-pattern', postcodePattern] : []),
@@ -1401,7 +1404,8 @@ export const createSourceAdapters = ({
       await rm(temporary, { force: true });
     }
     const size = (await stat(output)).size;
-    return { file: output, format: 'overture-jsonl', cacheBytes: size, checksum: await sha256File(output), cacheHit: false };
+    return { file: output, format: 'overture-jsonl', cacheBytes: size, checksum: await sha256File(output),
+      cacheHit: false, methodRevision: overtureResidentialRevision };
   };
 
   const materializeGeofabrik = async (shard, discovery, options) => {
@@ -1684,7 +1688,8 @@ export const createSourceAdapters = ({
       `${shard.id}-${version}-${openAddressesExportRevision}-${overtureResidentialRevision}-${normalizedCachePolicyIdentity(sourceMaximum, options.perLocality)}.jsonl`);
     try {
       const size = (await stat(output)).size;
-      return { file: output, format: 'overture-jsonl', cacheBytes: size, checksum: await sha256File(output), cacheHit: true };
+      return { file: output, format: 'overture-jsonl', cacheBytes: size, checksum: await sha256File(output), cacheHit: true,
+        methodRevision: `${openAddressesExportRevision}-${overtureResidentialRevision}` };
     } catch {}
     const rawIdentity = createHash('sha256').update(`${discovery.dataUrl}\u001f${version}`).digest('hex').slice(0, 16);
     const raw = resolve(options.cacheDir, 'raw', shard.source.archiveCacheName
@@ -1740,7 +1745,8 @@ export const createSourceAdapters = ({
       cacheBytes: size,
       checksum: await sha256File(output),
       sourceChecksum,
-      cacheHit: false
+      cacheHit: false,
+      methodRevision: `${openAddressesExportRevision}-${overtureResidentialRevision}`
     };
   };
 

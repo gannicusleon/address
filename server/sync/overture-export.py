@@ -24,6 +24,7 @@ parser.add_argument("--country", required=True)
 parser.add_argument("--release", required=True)
 parser.add_argument("--output", required=True)
 parser.add_argument("--max-records", type=int, required=True)
+parser.add_argument("--candidate-records", type=int)
 parser.add_argument("--per-locality", type=int, required=True)
 parser.add_argument("--assets-file", required=True)
 parser.add_argument("--building-assets-file", required=True)
@@ -36,6 +37,8 @@ if not args.country.isalpha() or len(args.country) != 2:
     raise ValueError("country must be an ISO alpha-2 code")
 if args.max_records < 1 or args.per_locality < 1:
     raise ValueError("record limits must be positive")
+if args.candidate_records is not None and args.candidate_records < args.max_records:
+    raise ValueError("candidate-records must be at least max-records")
 
 memory_limit = os.environ.get("ADDRESS_SYNC_OVERTURE_MEMORY_LIMIT", "4GB").strip().upper()
 if not re.fullmatch(r"[1-9]\d*(?:\.\d+)?(?:MB|GB)", memory_limit):
@@ -90,8 +93,9 @@ minimum_longitude, minimum_latitude, maximum_longitude, maximum_latitude = args.
 if not (-180 <= minimum_longitude < maximum_longitude <= 180
         and -90 <= minimum_latitude < maximum_latitude <= 90):
     raise ValueError("bounds must be a valid minLon minLat maxLon maxLat box")
-candidate_limit = args.max_records
-candidate_grid_scale = 100
+candidate_limit = args.candidate_records or args.max_records
+candidate_grid_scale = 500
+maximum_building_grid_cells = 256
 postcode_filter = ("TRUE" if not args.postcode_pattern else
                    f"regexp_full_match(coalesce(trim(postcode), ''), {sql_string(args.postcode_pattern)})")
 
@@ -106,7 +110,9 @@ CREATE TEMP TABLE address_candidates AS
     id, country, admin1, locality, postal_city, district,
     address_levels, postcode, street, number, unit,
     longitude, latitude, source_dataset, source_record_id,
-    ST_Point(longitude, latitude) AS geometry
+    ST_Point(longitude, latitude) AS geometry,
+    CAST(floor(longitude * {candidate_grid_scale}) AS INTEGER) AS grid_longitude,
+    CAST(floor(latitude * {candidate_grid_scale}) AS INTEGER) AS grid_latitude
   FROM read_json_auto({sql_string(str(candidate_file))}, format='newline_delimited')
   WHERE country = {country}
     AND {postcode_filter}
@@ -171,7 +177,9 @@ CREATE TEMP TABLE address_candidates AS
     ) AS candidate_locality_rank
     FROM source
   )
-  SELECT 0 AS priority, * EXCLUDE (candidate_locality_rank)
+  SELECT 0 AS priority, * EXCLUDE (candidate_locality_rank),
+    CAST(floor(longitude * {candidate_grid_scale}) AS INTEGER) AS grid_longitude,
+    CAST(floor(latitude * {candidate_grid_scale}) AS INTEGER) AS grid_latitude
   FROM ranked
   ORDER BY candidate_locality_rank,
     hash(coalesce(nullif(trim(admin1), ''), '*')), hash(id)
@@ -191,8 +199,8 @@ if candidate_count == 0:
 connection.execute(f"""
 CREATE TEMP TABLE candidate_grids AS
 SELECT DISTINCT
-  CAST(floor(longitude * {candidate_grid_scale}) AS INTEGER) AS grid_longitude,
-  CAST(floor(latitude * {candidate_grid_scale}) AS INTEGER) AS grid_latitude
+  grid_longitude,
+  grid_latitude
 FROM address_candidates;
 """)
 candidate_grids = connection.execute(
@@ -226,52 +234,98 @@ else:
         "semidetached_house", "static_caravan", "stilt_house", "terrace", "trullo"
     )) + ")"
     connection.execute(f"""
-CREATE TEMP TABLE residential_buildings AS
-SELECT buildings.id, buildings.class, buildings.geometry, buildings.bbox
+CREATE TEMP TABLE bounded_residential_buildings AS
+SELECT
+  buildings.id, buildings.class, buildings.geometry, buildings.bbox,
+  CAST(floor(buildings.bbox.xmin * {candidate_grid_scale}) AS INTEGER) AS minimum_grid_longitude,
+  CAST(floor(buildings.bbox.xmax * {candidate_grid_scale}) AS INTEGER) AS maximum_grid_longitude,
+  CAST(floor(buildings.bbox.ymin * {candidate_grid_scale}) AS INTEGER) AS minimum_grid_latitude,
+  CAST(floor(buildings.bbox.ymax * {candidate_grid_scale}) AS INTEGER) AS maximum_grid_latitude
 FROM read_parquet({building_asset_list}, union_by_name=true) AS buildings
-SEMI JOIN candidate_grids ON
-  candidate_grids.grid_longitude BETWEEN
-    CAST(floor(buildings.bbox.xmin * {candidate_grid_scale}) AS INTEGER)
-    AND CAST(floor(buildings.bbox.xmax * {candidate_grid_scale}) AS INTEGER)
-  AND candidate_grids.grid_latitude BETWEEN
-    CAST(floor(buildings.bbox.ymin * {candidate_grid_scale}) AS INTEGER)
-    AND CAST(floor(buildings.bbox.ymax * {candidate_grid_scale}) AS INTEGER)
 WHERE buildings.class IN {residential_classes}
   AND buildings.geometry IS NOT NULL
+  AND buildings.bbox.xmin IS NOT NULL
+  AND buildings.bbox.xmax IS NOT NULL
+  AND buildings.bbox.ymin IS NOT NULL
+  AND buildings.bbox.ymax IS NOT NULL
   AND buildings.bbox.xmax >= {minimum_longitude}
   AND buildings.bbox.xmin <= {maximum_longitude}
   AND buildings.bbox.ymax >= {minimum_latitude}
   AND buildings.bbox.ymin <= {maximum_latitude};
 """)
+    connection.execute(f"""
+CREATE TEMP TABLE residential_building_cells AS
+WITH compact AS (
+  SELECT * FROM bounded_residential_buildings
+  WHERE (maximum_grid_longitude - minimum_grid_longitude + 1)
+    * (maximum_grid_latitude - minimum_grid_latitude + 1) <= {maximum_building_grid_cells}
+), expanded AS (
+  SELECT compact.id, compact.class, compact.geometry, compact.bbox,
+    CAST(grid_longitude AS INTEGER) AS grid_longitude,
+    CAST(grid_latitude AS INTEGER) AS grid_latitude
+  FROM compact,
+    unnest(range(minimum_grid_longitude, maximum_grid_longitude + 1)) AS longitude_cells(grid_longitude),
+    unnest(range(minimum_grid_latitude, maximum_grid_latitude + 1)) AS latitude_cells(grid_latitude)
+)
+SELECT expanded.*
+FROM expanded
+JOIN candidate_grids USING (grid_longitude, grid_latitude);
+""")
     residential_building_count = connection.execute(
-        "SELECT count(*) FROM residential_buildings"
+        "SELECT count(*) FROM residential_building_cells"
     ).fetchone()[0]
-    if residential_building_count == 0:
+    oversized_building_count = connection.execute(f"""
+SELECT count(*) FROM bounded_residential_buildings
+WHERE (maximum_grid_longitude - minimum_grid_longitude + 1)
+  * (maximum_grid_latitude - minimum_grid_latitude + 1) > {maximum_building_grid_cells}
+""").fetchone()[0]
+    if residential_building_count == 0 and oversized_building_count == 0:
         raise RuntimeError("No residential buildings intersect the bounded address candidate cells")
     print(
-        f"Overture {args.country.upper()} buildings: filtered={residential_building_count}",
+        f"Overture {args.country.upper()} building_cells: filtered={residential_building_count} "
+        f"oversized_fallback={oversized_building_count}",
         file=sys.stderr, flush=True
     )
     classified_query = f"""
 COPY (
-  WITH matches AS (
+  WITH grid_matches AS (
     SELECT
       address_candidates.id AS address_id,
-      residential_buildings.id AS building_id,
-      residential_buildings.class AS building_class,
-      row_number() OVER (
-        PARTITION BY address_candidates.id
-        ORDER BY CASE WHEN residential_buildings.class = 'apartments' THEN 0 ELSE 1 END,
-          residential_buildings.id
-      ) AS building_rank
+      residential_building_cells.id AS building_id,
+      residential_building_cells.class AS building_class
     FROM address_candidates
-    JOIN residential_buildings
-      ON address_candidates.longitude BETWEEN residential_buildings.bbox.xmin AND residential_buildings.bbox.xmax
-      AND address_candidates.latitude BETWEEN residential_buildings.bbox.ymin AND residential_buildings.bbox.ymax
-      AND ST_Intersects(address_candidates.geometry, residential_buildings.geometry)
+    JOIN residential_building_cells
+      ON address_candidates.grid_longitude = residential_building_cells.grid_longitude
+      AND address_candidates.grid_latitude = residential_building_cells.grid_latitude
+      AND address_candidates.longitude BETWEEN residential_building_cells.bbox.xmin AND residential_building_cells.bbox.xmax
+      AND address_candidates.latitude BETWEEN residential_building_cells.bbox.ymin AND residential_building_cells.bbox.ymax
+      AND ST_Intersects(address_candidates.geometry, residential_building_cells.geometry)
+  ), oversized_matches AS (
+    SELECT
+      address_candidates.id AS address_id,
+      oversized_buildings.id AS building_id,
+      oversized_buildings.class AS building_class
+    FROM address_candidates
+    JOIN bounded_residential_buildings AS oversized_buildings
+      ON (oversized_buildings.maximum_grid_longitude - oversized_buildings.minimum_grid_longitude + 1)
+        * (oversized_buildings.maximum_grid_latitude - oversized_buildings.minimum_grid_latitude + 1)
+        > {maximum_building_grid_cells}
+      AND address_candidates.longitude BETWEEN oversized_buildings.bbox.xmin AND oversized_buildings.bbox.xmax
+      AND address_candidates.latitude BETWEEN oversized_buildings.bbox.ymin AND oversized_buildings.bbox.ymax
+      AND ST_Intersects(address_candidates.geometry, oversized_buildings.geometry)
+  ), matches AS (
+    SELECT * FROM grid_matches
+    UNION ALL
+    SELECT * FROM oversized_matches
+  ), ranked_matches AS (
+    SELECT *, row_number() OVER (
+      PARTITION BY address_id
+      ORDER BY CASE WHEN building_class = 'apartments' THEN 0 ELSE 1 END, building_id
+    ) AS building_rank
+    FROM matches
   ), classified AS (
     SELECT address_id, building_id, building_class
-    FROM matches
+    FROM ranked_matches
     WHERE building_rank = 1
   ), residential_candidates AS (
     SELECT
@@ -300,7 +354,7 @@ COPY (
     WHERE residential_region_rank > 1 AND residential_locality_rank <= {args.per_locality}
   )
   SELECT
-    balanced.* EXCLUDE (priority, residential_priority, geometry)
+    balanced.* EXCLUDE (priority, residential_priority, geometry, grid_longitude, grid_latitude)
   FROM balanced
   ORDER BY residential_priority, hash(coalesce(nullif(trim(admin1), ''), '*')), hash(id)
   LIMIT {args.max_records}

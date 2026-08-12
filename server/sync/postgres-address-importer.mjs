@@ -381,7 +381,7 @@ export class PostgresAddressImporter {
       levelLimits: [maxRecords, perLocality, perLocality, perLocality],
       overrides: new Map()
     };
-    const policyHash = this.hash(JSON.stringify({
+    const policyIdentity = {
       targetCount: activePolicy.targetCount,
       levelLimits: activePolicy.levelLimits,
       sourceMaxRecords,
@@ -392,7 +392,9 @@ export class PostgresAddressImporter {
         minPerNode: Number(activePolicy.minPerNode) || 0,
         nodes: [...(activePolicy.nodeFloors || new Map())].sort(([left], [right]) => left.localeCompare(right))
       }
-    })).slice(0, 8);
+    };
+    if (materialized.methodRevision) policyIdentity.methodRevision = materialized.methodRevision;
+    const policyHash = this.hash(JSON.stringify(policyIdentity)).slice(0, 8);
     const generatedDatasetId = `${shard.id}-${String(discovery.version).replace(/[^a-zA-Z0-9._-]/gu, '_')}-${materialized.checksum.slice(0, 12)}-${ADDRESS_IMPORT_REVISION}-${policyHash}`;
     const datasetVersion = `${String(discovery.version)}-${ADDRESS_IMPORT_REVISION}-${policyHash}`;
     const existingIdentity = await this.database.prepare(`SELECT id,status,active_count,rejected_count
@@ -510,6 +512,7 @@ export class PostgresAddressImporter {
       minimumCountRatio,
       minimumAdmin1Ratio,
       importRevision: ADDRESS_IMPORT_REVISION,
+      methodRevision: materialized.methodRevision || null,
       policyHash,
       rejectionReasons: Object.fromEntries([...rejectionReasons].sort(([left], [right]) => left.localeCompare(right)))
     };
