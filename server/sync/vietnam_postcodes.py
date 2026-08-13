@@ -22,7 +22,7 @@ def canonical_vietnamese_province(value):
     source = str(value or "").strip()
     folded = _fold(source)
     prefix = "Thành phố" if re.match(r"^tp\.?\s+", folded) else "Tỉnh"
-    name = re.sub(r"^(?:TỈNH|TP\.?)\s+", "", source, flags=re.IGNORECASE).lower().title()
+    name = re.sub(r"^(?:TỈNH|TINH|TP\.?)\s+", "", source, flags=re.IGNORECASE).lower().title()
     return f"{prefix} {name}".strip()
 
 
@@ -113,13 +113,28 @@ class VietnamPostcodes:
                     return None
         return next(iter(matches)) if len(matches) == 1 else None
 
+    def _resolve_province(self, tags):
+        provinces = {
+            normalized_vietnamese_place(tags.get(key, ""))
+            for key in ("addr:province", "addr:state") if str(tags.get(key, "")).strip()
+        }
+        matches = provinces.intersection(self.province_names)
+        return next(iter(matches)) if len(matches) == 1 else None
+
     def resolve(self, tags, longitude=None, latitude=None):
         match = self._resolve_match(tags)
         return match[0] if match else None
 
     def enrich(self, tags, longitude=None, latitude=None):
+        province = self._resolve_province(tags)
         match = self._resolve_match(tags)
-        if not match:
+        if not province and not match:
             return None
-        postcode, province = match
-        return {"addr:state": self.province_names[province], "addr:postcode": postcode}
+        enrichment = {}
+        if province:
+            enrichment["addr:state"] = self.province_names[province]
+        if match:
+            postcode, matched_province = match
+            enrichment["addr:state"] = self.province_names[matched_province]
+            enrichment["addr:postcode"] = postcode
+        return enrichment

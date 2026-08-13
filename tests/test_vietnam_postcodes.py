@@ -48,6 +48,9 @@ class VietnamPostcodesTest(unittest.TestCase):
         self.assertIsNone(postcodes.resolve({
             "addr:province": "Tinh Dong Nai", "addr:commune": "Xa Loc Thanh"
         }))
+        self.assertEqual(postcodes.enrich({
+            "addr:state": "Thành phố Đồng Nai", "addr:ward": "Unknown"
+        }), {"addr:state": "Tỉnh Dong Nai"})
         self.assertIsNone(postcodes.resolve({"addr:ward": "Phuong Ben Thanh"}))
         self.assertEqual(postcodes.resolve({
             "addr:province": "Thanh pho Ho Chi Minh", "addr:ward": "Phuong Ben Thanh",
