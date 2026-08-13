@@ -31,12 +31,6 @@ class GeofabrikExportTest(unittest.TestCase):
   <way id="10" version="1">
     <nd ref="2"/><nd ref="3"/><nd ref="4"/><nd ref="5"/><nd ref="2"/>
   </way>
-  <way id="11" version="1">
-    <nd ref="2"/><nd ref="3"/><nd ref="4"/><nd ref="5"/><nd ref="2"/>
-    <tag k="addr:housenumber" v="14"/>
-    <tag k="addr:street" v="Đường Nguồn"/>
-    <tag k="building" v="house"/>
-  </way>
   <relation id="20" version="1">
     <member type="way" ref="10" role="outer"/>
     <tag k="type" v="multipolygon"/>
@@ -118,6 +112,12 @@ class GeofabrikExportTest(unittest.TestCase):
   <node id="5" version="1" lat="1" lon="0"/>
   <way id="10" version="1">
     <nd ref="2"/><nd ref="3"/><nd ref="4"/><nd ref="5"/><nd ref="2"/>
+  </way>
+  <way id="11" version="1">
+    <nd ref="2"/><nd ref="3"/><nd ref="4"/><nd ref="5"/><nd ref="2"/>
+    <tag k="addr:housenumber" v="14"/>
+    <tag k="addr:street" v="Đường Nguồn"/>
+    <tag k="building" v="house"/>
   </way>
   <relation id="20" version="1">
     <member type="way" ref="10" role="outer"/>
