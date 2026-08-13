@@ -39,6 +39,9 @@ class VietnamPostcodesTest(unittest.TestCase):
         self.assertEqual(postcodes.resolve({
             "addr:province": "Thanh pho Ho Chi Minh", "addr:ward": "Phuong Ben Thanh"
         }), "70000")
+        self.assertEqual(postcodes.enrich({
+            "addr:province": "Thanh pho Ho Chi Minh", "addr:ward": "Phuong Ben Thanh"
+        }), {"addr:state": "Thành phố Ho Chi Minh", "addr:postcode": "70000"})
         self.assertEqual(postcodes.resolve({
             "addr:province": "Thanh pho Ho Chi Minh", "addr:ward": "Ben Thanh"
         }), "70000")

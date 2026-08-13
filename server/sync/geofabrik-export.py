@@ -188,9 +188,14 @@ class AddressSampler:
 
     def capture(self, object_type, object_id, tags, longitude, latitude, residential_building=None):
         if self.postcodes:
-            postcode = self.postcodes.resolve(tags, longitude, latitude)
-            if postcode:
-                tags = {**tags, "addr:postcode": postcode}
+            enrichment = self.postcodes.enrich(tags, longitude, latitude) \
+                if hasattr(self.postcodes, "enrich") else None
+            if enrichment:
+                tags = {**tags, **enrichment}
+            else:
+                postcode = self.postcodes.resolve(tags, longitude, latitude)
+                if postcode:
+                    tags = {**tags, "addr:postcode": postcode}
         house_number = tags.get("addr:housenumber", "").strip()
         street = (tags.get("addr:street") or tags.get("addr:place") or "").strip()
         if not house_number or not street:
