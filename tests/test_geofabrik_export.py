@@ -31,6 +31,12 @@ class GeofabrikExportTest(unittest.TestCase):
   <way id="10" version="1">
     <nd ref="2"/><nd ref="3"/><nd ref="4"/><nd ref="5"/><nd ref="2"/>
   </way>
+  <way id="11" version="1">
+    <nd ref="2"/><nd ref="3"/><nd ref="4"/><nd ref="5"/><nd ref="2"/>
+    <tag k="addr:housenumber" v="14"/>
+    <tag k="addr:street" v="Đường Nguồn"/>
+    <tag k="building" v="house"/>
+  </way>
   <relation id="20" version="1">
     <member type="way" ref="10" role="outer"/>
     <tag k="type" v="multipolygon"/>
@@ -145,7 +151,7 @@ class GeofabrikExportTest(unittest.TestCase):
             ], check=True, capture_output=True, text=True)
             records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
 
-        self.assertEqual(len(records), 2)
+        self.assertEqual(len(records), 3)
         for record in records:
             self.assertEqual(record["properties"]["addr:state"], "Tỉnh Mới")
             self.assertEqual(record["properties"]["addr:ward"], "Phường Mới")

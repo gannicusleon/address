@@ -271,16 +271,25 @@ class AddressSampler:
 
     def way(self, way, tags=None):
         tags = tags or {tag.k: tag.v for tag in way.tags}
-        if not tags.get("addr:housenumber") or not (tags.get("addr:street") or tags.get("addr:place")):
-            return
-        locations = [node.location for node in way.nodes if node.location.valid()]
-        if not locations:
+        point = address_way_point(way, tags)
+        if point is None:
             return
         self.capture(
             "way", way.id, tags,
-            sum(location.lon for location in locations) / len(locations),
-            sum(location.lat for location in locations) / len(locations)
+            point[0], point[1]
         )
+
+
+def address_way_point(way, tags):
+    if not tags.get("addr:housenumber") or not (tags.get("addr:street") or tags.get("addr:place")):
+        return None
+    locations = [node.location for node in way.nodes if node.location.valid()]
+    if not locations:
+        return None
+    return (
+        sum(location.lon for location in locations) / len(locations),
+        sum(location.lat for location in locations) / len(locations)
+    )
 
 
 class ResidentialBuildingMatcher:
@@ -421,10 +430,13 @@ class AdministrativeBoundaryMatcher:
         self.points_by_tile = {}
         for points in address_matcher.points_by_tile.values():
             for point in points:
-                _, longitude, latitude = point
-                tile = (math.floor(longitude * 10), math.floor(latitude * 10))
-                self.points_by_tile.setdefault(tile, []).append(point)
+                address_id, longitude, latitude = point
+                self.add_point(f"node/{address_id}", longitude, latitude)
         self.matches = {}
+
+    def add_point(self, record_id, longitude, latitude):
+        tile = (math.floor(longitude * 10), math.floor(latitude * 10))
+        self.points_by_tile.setdefault(tile, []).append((record_id, longitude, latitude))
 
     def area(self, area, tags):
         if not self.levels or tags.get("boundary", "").strip().casefold() != "administrative":
@@ -456,10 +468,10 @@ class AdministrativeBoundaryMatcher:
                     if key not in self.matches or candidate < self.matches[key]:
                         self.matches[key] = candidate
 
-    def enrich(self, address_id, tags):
+    def enrich(self, record_id, tags):
         enriched = tags
         for field, target_tag in ADMINISTRATIVE_TARGET_TAGS.items():
-            match = self.matches.get((address_id, field))
+            match = self.matches.get((record_id, field))
             authoritative_vietnam_boundary = self.country == "VN" and field in {"admin1", "ward"}
             if match is None or (str(tags.get(target_tag, "")).strip() and not authoritative_vietnam_boundary):
                 continue
@@ -504,6 +516,7 @@ sampler = AddressSampler(
 )
 matcher = ResidentialBuildingMatcher(sampler)
 administrative_matcher = None
+vietnam_address_ways = []
 location_index = None
 location_storage = "flex_mem"
 if pathlib.Path(args.input).stat().st_size >= 1_000_000_000:
@@ -521,7 +534,12 @@ try:
                 matcher.node(entity, tags)
             elif entity.is_way():
                 tags = {tag.k: tag.v for tag in entity.tags}
-                sampler.way(entity, tags)
+                if args.country == "VN":
+                    point = address_way_point(entity, tags)
+                    if point is not None:
+                        vietnam_address_ways.append((entity.id, tags, point[0], point[1]))
+                else:
+                    sampler.way(entity, tags)
                 matcher.way(entity, tags)
             elif entity.is_area():
                 tags = {tag.k: tag.v for tag in entity.tags}
@@ -537,6 +555,8 @@ try:
             location_index.unlink(missing_ok=True)
     if args.country == "VN":
         administrative_matcher = AdministrativeBoundaryMatcher(args.country, matcher)
+        for way_id, _, longitude, latitude in vietnam_address_ways:
+            administrative_matcher.add_point(f"way/{way_id}", longitude, latitude)
         processor = osmium.FileProcessor(args.input).with_locations(location_storage) \
             .with_areas(KeyFilter("boundary")).with_filter(KeyFilter("boundary"))
         try:
@@ -547,6 +567,11 @@ try:
             del processor
             if location_index:
                 location_index.unlink(missing_ok=True)
+        for way_id, tags, longitude, latitude in vietnam_address_ways:
+            sampler.capture(
+                "way", way_id, administrative_matcher.enrich(f"way/{way_id}", tags),
+                longitude, latitude
+            )
     selected_matches = matcher.selected_matches(args.max_records)
     if selected_matches or ADMINISTRATIVE_LEVELS.get(args.country):
         processor = osmium.FileProcessor(args.input).with_filter(KeyFilter("addr:housenumber", "addr:street", "addr:place"))
@@ -560,7 +585,7 @@ try:
                         and tags.get("building", "").strip().casefold() not in RESIDENTIAL_BUILDINGS:
                     continue
                 if administrative_matcher is not None:
-                    tags = administrative_matcher.enrich(entity.id, tags)
+                    tags = administrative_matcher.enrich(f"node/{entity.id}", tags)
                 sampler.node(entity, tags, residential_building)
         finally:
             del processor
