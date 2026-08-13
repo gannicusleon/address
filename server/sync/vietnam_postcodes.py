@@ -73,7 +73,7 @@ class VietnamPostcodes:
         self.ambiguous_row_count = sum(len(postcodes) for postcodes in self.by_pair.values() if len(postcodes) != 1)
         self.unique_key_count = sum(len(postcodes) == 1 for postcodes in self.by_pair.values())
 
-    def resolve(self, tags):
+    def resolve(self, tags, longitude=None, latitude=None):
         if str(tags.get("addr:postcode", "")).strip():
             return None
         provinces = {

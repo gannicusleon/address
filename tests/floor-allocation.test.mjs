@@ -157,7 +157,7 @@ describe('floor-aware hierarchical allocation', () => {
     database.close();
   });
 
-  it('re-imports under the v22 revision when node floors change', async () => {
+  it('re-imports under the v23 revision when node floors change', async () => {
     const directory = resolve('.data-cache', 'floor-allocation-tests', randomUUID());
     directories.push(directory);
     await mkdir(directory, { recursive: true });
@@ -196,7 +196,7 @@ describe('floor-aware hierarchical allocation', () => {
     const policy = { targetCount: 10, levelLimits: [10, 10, 10, 0], overrides: new Map() };
     const first = await importWith(policy);
     expect(first).toMatchObject({ acceptedCount: 2, skipped: false });
-    expect(first.datasetId).toContain('strict-residential-v22');
+    expect(first.datasetId).toContain('strict-residential-v23');
     await expect(importWith(policy)).resolves.toMatchObject({ skipped: true });
     const refreshed = await importWith({ ...policy, nodeFloors: new Map([[a1Key('Pennsylvania'), 2]]) });
     expect(refreshed).toMatchObject({ acceptedCount: 2, skipped: false });

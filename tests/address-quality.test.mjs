@@ -56,6 +56,15 @@ describe('country address quality gate', () => {
     expect(validateAddressQuality({ countryCode: 'US', components: { ...base, district: '', postcode: '19103' } }).valid).toBe(true);
   });
 
+  it('does not require unused district fields for India and the Philippines', () => {
+    expect(validateAddressQuality({
+      countryCode: 'IN', components: { ...base, district: '', postcode: '110001' }
+    }).valid).toBe(true);
+    expect(validateAddressQuality({
+      countryCode: 'PH', components: { ...base, district: '', postcode: '1000' }
+    }).valid).toBe(true);
+  });
+
   it('accepts the current two-level Vietnam hierarchy without a legacy district', () => {
     expect(validateAddressQuality({
       countryCode: 'VN',

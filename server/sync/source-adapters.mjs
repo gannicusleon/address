@@ -27,7 +27,7 @@ const taiwanResidentialExporter = resolve(syncRoot, 'taiwan-residential-export.p
 const hongKongResidentialExporter = resolve(syncRoot, 'hong-kong-residential-export.py');
 const licensedResidentialExporter = resolve(syncRoot, 'licensed-residential-export.py');
 const overtureResidentialRevision = 'residential-buildings-v9';
-const geofabrikExportRevision = 'g70';
+const geofabrikExportRevision = 'g71';
 const japanAbrExportRevision = 'abr-rsdt-plateau-osm-chiban-v10';
 const singaporeHdbExportRevision = 'hdb-property-building-onemap-v2';
 const koreaKaptExportRevision = 'kapt-official-apartments-v2';
@@ -790,7 +790,7 @@ export const createSourceAdapters = ({
     let postcodeFile = null;
     if (shard.postcodeDataUrl) {
       postcodeDataFormat = shard.postcodeDataFormat || 'html';
-      if (!['html', 'pdf'].includes(postcodeDataFormat)) {
+      if (!['html', 'pdf', 'geojson'].includes(postcodeDataFormat)) {
         throw new Error(`Unsupported postcode data format: ${postcodeDataFormat}`);
       }
       postcodeDataUrl = shard.postcodeDataUrl;
@@ -1462,7 +1462,8 @@ export const createSourceAdapters = ({
           '--max-records', String(options.maxRecords), '--per-locality', String(options.perLocality),
           '--country', shard.countryCode,
           ...(postcodeFile && discovery.postcodeDataFormat === 'pdf' ? ['--postcode-pdf', postcodeFile] : []),
-          ...(postcodeFile && discovery.postcodeDataFormat !== 'pdf' ? ['--postcode-html', postcodeFile] : []),
+          ...(postcodeFile && discovery.postcodeDataFormat === 'html' ? ['--postcode-html', postcodeFile] : []),
+          ...(postcodeFile && discovery.postcodeDataFormat === 'geojson' ? ['--postcode-geojson', postcodeFile] : []),
           ...(discovery.boundaryUrl ? ['--boundary', boundary] : []),
           ...excludeBoundaries.flatMap((file) => ['--exclude-boundary', file])],
         phase: `materialize:${shard.id}`

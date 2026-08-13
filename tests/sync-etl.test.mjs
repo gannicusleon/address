@@ -32,12 +32,12 @@ const source = {
 describe('address source shard catalog', () => {
   it('expands independently supported country shards with explicit refresh intervals', async () => {
     const catalog = await loadSourceCatalog();
-    expect(catalog.shards).toHaveLength(138);
+    expect(catalog.shards).toHaveLength(141);
     expect(catalog.shards.filter((shard) => shard.id !== 'korea-kapt-residential')
       .every((shard) => shard.intervalDays === 30)).toBe(true);
     expect(catalog.shards.some((shard) => shard.countryCode === 'CN')).toBe(false);
     expect(catalog.shards.some((shard) => shard.countryCode === 'NG')).toBe(false);
-    for (const countryCode of ['AU', 'CA', 'ES', 'IT']) {
+    for (const countryCode of ['AU', 'CA', 'ES', 'IT', 'IN', 'PH', 'VN']) {
       expect(catalog.shards.filter((shard) => shard.countryCode === countryCode)).toHaveLength(2);
     }
     expect(catalog.shards.filter((shard) => shard.countryCode === 'NL')).toHaveLength(2);
@@ -1092,7 +1092,7 @@ describe('source record normalization', () => {
     ['VN', {
       'addr:province': 'Thành phố Hồ Chí Minh', 'addr:city': 'Thành phố Hồ Chí Minh', 'addr:ward': 'Phường Bến Thành',
       'addr:postcode': '70000'
-    }, { admin1: 'Thành phố Hồ Chí Minh', locality: 'Phường Bến Thành', district: '' }]
+    }, { admin1: 'Thành phố Hồ Chí Minh', locality: 'Thành phố Hồ Chí Minh', district: 'Phường Bến Thành' }]
   ])('maps current %s OSM administrative address tags', (countryCode, addressTags, expected) => {
     const record = normalizeSourceRecord({
       id: `way/${countryCode}`, geometry: { type: 'Point', coordinates: [100.5, 13.7] },
@@ -1445,7 +1445,7 @@ describe('built-in ETL planning and publishing', () => {
     expect(adapterSource).toContain("expectedBytes: discovery.postcodeDataFormat === 'pdf' ? null : discovery.postcodeBytes");
     expect(geofabrik).toContain('def way(self, way, tags=None)');
     expect(geofabrik).toContain('def area(self, area, tags)');
-    expect(geofabrik).toContain('.with_areas(KeyFilter("building"))');
+    expect(geofabrik).toContain('.with_areas(KeyFilter("building", "boundary"))');
     expect(geofabrik).toContain('f"relation/{area.orig_id()}"');
     expect(geofabrik).toContain('osmium.FileProcessor(args.input).with_locations(location_storage)');
     expect(geofabrik).toContain('sparse_file_array,{location_index}');
@@ -1465,6 +1465,8 @@ describe('built-in ETL planning and publishing', () => {
     expect(geofabrik).toContain('self.group_limit = max(1, min(per_locality, max_records))');
     expect(geofabrik).toContain('"addr:subdistrict", "addr:barangay", "addr:ward", "addr:commune"');
     expect(geofabrik).toContain('VietnamPostcodes(args.postcode_pdf)');
+    expect(geofabrik).toContain('SpatialPostcodes(args.postcode_geojson)');
+    expect(geofabrik).toContain('class AdministrativeBoundaryMatcher');
     expect(geofabrik).toContain('is_residential = building in RESIDENTIAL_BUILDINGS');
     expect(geofabrik).toContain('class PhilippinePostcodes');
     expect(geofabrik).toContain('if len(entries) < 900:');
@@ -1527,7 +1529,7 @@ describe('built-in ETL planning and publishing', () => {
     expect(result).toMatchObject({
       acceptedCount: 1, rejectedCount: 1, localityCount: 1, skipped: false,
       rejectionReasons: { missing_residential_evidence: 1 },
-      metrics: expect.objectContaining({ importRevision: 'strict-residential-v22' })
+      metrics: expect.objectContaining({ importRevision: 'strict-residential-v23' })
     });
     expect(await database.prepare('SELECT status,active_count FROM address_datasets WHERE id=?').bind(result.datasetId).first())
       .toMatchObject({ status: 'active', active_count: 1 });

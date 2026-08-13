@@ -17,7 +17,7 @@
       "shareAlike": false,
       "redistributionAllowed": true,
       "updateCadence": "monthly",
-      "countries": ["US", "CA", "MX", "DE", "FR", "IT", "ES", "NL", "TW", "HK", "AU"]
+      "countries": ["US", "CA", "MX", "DE", "FR", "IT", "ES", "NL", "TW", "HK", "AU", "IN", "PH", "VN"]
     },
     {
       "id": "pdok-bag-nl-residential",
@@ -653,7 +653,12 @@
         },
         { "countryCode": "TR", "extractId": "turkey" },
         { "countryCode": "SA", "extractId": "gcc-states", "boundaryIso3": "SAU" },
-        { "countryCode": "IN", "extractId": "india" },
+        {
+          "countryCode": "IN",
+          "extractId": "india",
+          "postcodeDataUrl": "https://pub-0429b8e3b5a946e69ea007df844a6f1c.r2.dev/postal/boundaries/Datagov_Pincode_Boundaries.geojson",
+          "postcodeDataFormat": "geojson"
+        },
         { "countryCode": "ZA", "extractId": "south-africa" },
         { "countryCode": "RU", "extractId": "russia" },
         { "countryCode": "BR", "extractId": "brazil" }

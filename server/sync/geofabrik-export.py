@@ -12,6 +12,7 @@ from osmium.filter import KeyFilter
 from shapely import contains_xy, intersects_xy, prepare
 from shapely.geometry import LineString, shape
 from shapely.ops import unary_union
+from spatial_postcodes import SpatialPostcodes
 from vietnam_postcodes import VietnamPostcodes
 
 
@@ -88,7 +89,7 @@ class PhilippinePostcodes:
             self.by_pair.setdefault((province, locality), set()).add(postcode)
             self.by_locality.setdefault(locality, set()).add(postcode)
 
-    def resolve(self, tags):
+    def resolve(self, tags, longitude=None, latitude=None):
         if tags.get("addr:postcode", "").strip():
             return None
         locality = next((normalized_place(tags.get(key, "")) for key in (
@@ -187,7 +188,7 @@ class AddressSampler:
 
     def capture(self, object_type, object_id, tags, longitude, latitude, residential_building=None):
         if self.postcodes:
-            postcode = self.postcodes.resolve(tags)
+            postcode = self.postcodes.resolve(tags, longitude, latitude)
             if postcode:
                 tags = {**tags, "addr:postcode": postcode}
         house_number = tags.get("addr:housenumber", "").strip()
@@ -292,8 +293,6 @@ class ResidentialBuildingMatcher:
         self.occupied_tiles = set()
 
     def node(self, node, tags):
-        if tags.get("building", "").strip().casefold() in RESIDENTIAL_BUILDINGS:
-            return
         house_number = tags.get("addr:housenumber", "").strip()
         street = (tags.get("addr:street") or tags.get("addr:place") or "").strip()
         if not house_number or not street or not node.location.valid():
@@ -397,6 +396,76 @@ class ResidentialBuildingMatcher:
         self.points_by_tile.clear()
         self.matches.clear()
 
+
+ADMINISTRATIVE_LEVELS = {
+    "IN": {4: "admin1", 6: "locality", 8: "locality"},
+    "PH": {4: "admin1", 6: "locality", 10: "district"},
+    "VN": {4: "admin1", 6: "locality", 8: "district"}
+}
+
+ADMINISTRATIVE_TARGET_TAGS = {
+    "admin1": "addr:state",
+    "locality": "addr:city",
+    "district": "addr:district"
+}
+
+
+class AdministrativeBoundaryMatcher:
+    def __init__(self, country, address_matcher):
+        self.levels = ADMINISTRATIVE_LEVELS.get(country, {})
+        self.geometry_factory = osmium.geom.GeoJSONFactory()
+        self.points_by_tile = {}
+        for points in address_matcher.points_by_tile.values():
+            for point in points:
+                _, longitude, latitude = point
+                tile = (math.floor(longitude * 10), math.floor(latitude * 10))
+                self.points_by_tile.setdefault(tile, []).append(point)
+        self.matches = {}
+
+    def area(self, area, tags):
+        if not self.levels or tags.get("boundary", "").strip().casefold() != "administrative":
+            return
+        try:
+            level = int(tags.get("admin_level", ""))
+        except ValueError:
+            return
+        field = self.levels.get(level)
+        name = tags.get("name", "").strip()
+        if not field or not name:
+            return
+        try:
+            geometry = shape(json.loads(self.geometry_factory.create_multipolygon(area)))
+        except (RuntimeError, ValueError, json.JSONDecodeError):
+            return
+        if geometry.is_empty:
+            return
+        prepare(geometry)
+        minimum_longitude, minimum_latitude, maximum_longitude, maximum_latitude = geometry.bounds
+        for tile_longitude in range(math.floor(minimum_longitude * 10), math.floor(maximum_longitude * 10) + 1):
+            for tile_latitude in range(math.floor(minimum_latitude * 10), math.floor(maximum_latitude * 10) + 1):
+                for address_id, longitude, latitude in self.points_by_tile.get((tile_longitude, tile_latitude), ()):
+                    if not (contains_xy(geometry, longitude, latitude) or intersects_xy(geometry, longitude, latitude)):
+                        continue
+                    key = (address_id, field)
+                    candidate = (geometry.area, -level, name)
+                    if key not in self.matches or candidate < self.matches[key]:
+                        self.matches[key] = candidate
+
+    def enrich(self, address_id, tags):
+        enriched = tags
+        for field, target_tag in ADMINISTRATIVE_TARGET_TAGS.items():
+            match = self.matches.get((address_id, field))
+            if match is None or str(tags.get(target_tag, "")).strip():
+                continue
+            if enriched is tags:
+                enriched = dict(tags)
+            enriched[target_tag] = match[2]
+        return enriched
+
+    def close(self):
+        self.points_by_tile.clear()
+        self.matches.clear()
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--input", required=True)
 parser.add_argument("--output", required=True)
@@ -407,16 +476,20 @@ parser.add_argument("--per-locality", required=True, type=int)
 parser.add_argument("--country", required=True)
 parser.add_argument("--postcode-html")
 parser.add_argument("--postcode-pdf")
+parser.add_argument("--postcode-geojson")
 args = parser.parse_args()
 
 if args.postcode_html and args.country != "PH":
     raise RuntimeError("Official PHLPost enrichment is only valid for PH")
 if args.postcode_pdf and args.country != "VN":
     raise RuntimeError("Official Vietnam postcode enrichment is only valid for VN")
-if args.postcode_html and args.postcode_pdf:
+if args.postcode_geojson and args.country != "IN":
+    raise RuntimeError("Official India postcode enrichment is only valid for IN")
+if sum(bool(value) for value in (args.postcode_html, args.postcode_pdf, args.postcode_geojson)) > 1:
     raise RuntimeError("Only one postcode enrichment source may be configured")
 postcodes = PhilippinePostcodes(args.postcode_html) if args.postcode_html \
-    else VietnamPostcodes(args.postcode_pdf) if args.postcode_pdf else None
+    else VietnamPostcodes(args.postcode_pdf) if args.postcode_pdf \
+    else SpatialPostcodes(args.postcode_geojson) if args.postcode_geojson else None
 
 exclude_geometries = [boundary_from_geojson(path).geometry for path in args.exclude_boundary]
 exclude_boundary = CompiledBoundary(unary_union(exclude_geometries)) if exclude_geometries else None
@@ -424,21 +497,21 @@ sampler = AddressSampler(
     args.max_records, args.per_locality, boundary_from_geojson(args.boundary), exclude_boundary, postcodes
 )
 matcher = ResidentialBuildingMatcher(sampler)
+administrative_matcher = None
 location_index = None
 location_storage = "flex_mem"
 if pathlib.Path(args.input).stat().st_size >= 1_000_000_000:
     location_index = pathlib.Path(args.output).with_suffix(pathlib.Path(args.output).suffix + ".locations.idx")
     location_index.unlink(missing_ok=True)
     location_storage = f"sparse_file_array,{location_index}"
-filter_keys = ["addr:housenumber", "addr:street", "addr:place", "building"]
+filter_keys = ["addr:housenumber", "addr:street", "addr:place", "building", "boundary"]
 try:
     processor = osmium.FileProcessor(args.input).with_locations(location_storage) \
-        .with_areas(KeyFilter("building")).with_filter(KeyFilter(*filter_keys))
+        .with_areas(KeyFilter("building", "boundary")).with_filter(KeyFilter(*filter_keys))
     try:
         for entity in processor:
             if entity.is_node():
                 tags = {tag.k: tag.v for tag in entity.tags}
-                sampler.node(entity, tags)
                 matcher.node(entity, tags)
             elif entity.is_way():
                 tags = {tag.k: tag.v for tag in entity.tags}
@@ -447,23 +520,35 @@ try:
             elif entity.is_area():
                 tags = {tag.k: tag.v for tag in entity.tags}
                 matcher.area(entity, tags)
+                if administrative_matcher is None and ADMINISTRATIVE_LEVELS.get(args.country):
+                    administrative_matcher = AdministrativeBoundaryMatcher(args.country, matcher)
+                if administrative_matcher is not None:
+                    administrative_matcher.area(entity, tags)
     finally:
         del processor
         if location_index:
             location_index.unlink(missing_ok=True)
     selected_matches = matcher.selected_matches(args.max_records)
-    if selected_matches:
+    if selected_matches or ADMINISTRATIVE_LEVELS.get(args.country):
         processor = osmium.FileProcessor(args.input).with_filter(KeyFilter("addr:housenumber", "addr:street", "addr:place"))
         try:
             for entity in processor:
-                if not entity.is_node() or entity.id not in selected_matches or not entity.location.valid():
+                if not entity.is_node() or not entity.location.valid():
                     continue
                 tags = {tag.k: tag.v for tag in entity.tags}
-                sampler.node(entity, tags, selected_matches[entity.id])
+                residential_building = selected_matches.get(entity.id)
+                if residential_building is None \
+                        and tags.get("building", "").strip().casefold() not in RESIDENTIAL_BUILDINGS:
+                    continue
+                if administrative_matcher is not None:
+                    tags = administrative_matcher.enrich(entity.id, tags)
+                sampler.node(entity, tags, residential_building)
         finally:
             del processor
 finally:
     matcher.close()
+    if administrative_matcher is not None:
+        administrative_matcher.close()
 selected = sorted(
     ((-negative_rank, record_id, record)
      for group in sampler.groups.values()
