@@ -400,18 +400,22 @@ class ResidentialBuildingMatcher:
 ADMINISTRATIVE_LEVELS = {
     "IN": {4: "admin1", 6: "locality", 8: "locality"},
     "PH": {4: "admin1", 6: "locality", 10: "district"},
-    "VN": {4: "admin1", 6: "locality", 8: "district"}
+    # Vietnam's 2025 two-tier hierarchy uses admin_level=4 provinces and
+    # admin_level=6 wards/communes. Older level 8 boundaries are incomplete.
+    "VN": {4: "admin1", 6: "ward"}
 }
 
 ADMINISTRATIVE_TARGET_TAGS = {
     "admin1": "addr:state",
     "locality": "addr:city",
-    "district": "addr:district"
+    "district": "addr:district",
+    "ward": "addr:ward"
 }
 
 
 class AdministrativeBoundaryMatcher:
     def __init__(self, country, address_matcher):
+        self.country = country
         self.levels = ADMINISTRATIVE_LEVELS.get(country, {})
         self.geometry_factory = osmium.geom.GeoJSONFactory()
         self.points_by_tile = {}
@@ -430,7 +434,8 @@ class AdministrativeBoundaryMatcher:
         except ValueError:
             return
         field = self.levels.get(level)
-        name = tags.get("name", "").strip()
+        name = (tags.get("name:vi", "") if self.country == "VN" else "").strip() \
+            or tags.get("name", "").strip()
         if not field or not name:
             return
         try:
@@ -455,7 +460,8 @@ class AdministrativeBoundaryMatcher:
         enriched = tags
         for field, target_tag in ADMINISTRATIVE_TARGET_TAGS.items():
             match = self.matches.get((address_id, field))
-            if match is None or str(tags.get(target_tag, "")).strip():
+            authoritative_vietnam_boundary = self.country == "VN" and field in {"admin1", "ward"}
+            if match is None or (str(tags.get(target_tag, "")).strip() and not authoritative_vietnam_boundary):
                 continue
             if enriched is tags:
                 enriched = dict(tags)

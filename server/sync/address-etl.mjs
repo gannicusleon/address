@@ -435,9 +435,10 @@ export const normalizeSourceRecord = (value, shard, format) => {
       district = clean(properties['addr:barangay'] || properties['addr:district']
         || properties['addr:suburb'] || properties['addr:county']);
     } else if (shard.countryCode === 'VN') {
-      locality = sourceLocality;
-      district = clean(properties['addr:ward'] || properties['addr:commune']
+      const ward = clean(properties['addr:ward'] || properties['addr:commune']
         || properties['addr:subdistrict']);
+      locality = sourceLocality || ward;
+      district = ward && clean(ward) !== clean(locality) ? ward : '';
     }
     postalLocality = locality;
     if (shard.countryCode === 'TW') {

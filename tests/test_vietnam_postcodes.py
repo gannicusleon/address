@@ -39,6 +39,9 @@ class VietnamPostcodesTest(unittest.TestCase):
         self.assertEqual(postcodes.resolve({
             "addr:province": "Thanh pho Ho Chi Minh", "addr:ward": "Phuong Ben Thanh"
         }), "70000")
+        self.assertEqual(postcodes.resolve({
+            "addr:province": "Thanh pho Ho Chi Minh", "addr:ward": "Ben Thanh"
+        }), "70000")
         self.assertIsNone(postcodes.resolve({
             "addr:province": "Tinh Dong Nai", "addr:commune": "Xa Loc Thanh"
         }))
@@ -47,6 +50,14 @@ class VietnamPostcodesTest(unittest.TestCase):
             "addr:province": "Thanh pho Ho Chi Minh", "addr:ward": "Phuong Ben Thanh",
             "addr:postcode": "70001"
         }))
+
+    def test_normalizes_special_zone_prefixes(self):
+        postcodes = VietnamPostcodes.from_rows([
+            ("TINH KIEN GIANG", "DAC KHU PHU QUOC", "92500")
+        ])
+        self.assertEqual(postcodes.resolve({
+            "addr:state": "Tinh Kien Giang", "addr:ward": "Phu Quoc"
+        }), "92500")
 
 
 if __name__ == "__main__":

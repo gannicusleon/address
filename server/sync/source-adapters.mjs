@@ -28,6 +28,7 @@ const hongKongResidentialExporter = resolve(syncRoot, 'hong-kong-residential-exp
 const licensedResidentialExporter = resolve(syncRoot, 'licensed-residential-export.py');
 const overtureResidentialRevision = 'residential-buildings-v9';
 const geofabrikExportRevision = 'g71';
+const vietnamGeofabrikExportRevision = 'vn-two-tier-v1';
 const japanAbrExportRevision = 'abr-rsdt-plateau-osm-chiban-v10';
 const singaporeHdbExportRevision = 'hdb-property-building-onemap-v2';
 const koreaKaptExportRevision = 'kapt-official-apartments-v2';
@@ -1412,6 +1413,7 @@ export const createSourceAdapters = ({
     const version = safeVersion(discovery.version);
     const boundarySignature = [
       geofabrikExportRevision,
+      shard.countryCode === 'VN' ? vietnamGeofabrikExportRevision : '',
       shard.boundaryIso3 ? `b${shard.boundaryIso3}` : '',
       (shard.excludeBoundaryIso3 || []).length ? `x${shard.excludeBoundaryIso3.join('-')}` : ''
     ].filter(Boolean).join('-');

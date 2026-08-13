@@ -1104,6 +1104,19 @@ describe('source record normalization', () => {
     expect(record.components).toMatchObject(expected);
   });
 
+  it('uses a current Vietnam ward as locality when a source city is absent', () => {
+    const record = normalizeSourceRecord({
+      id: 'way/VN-ward', geometry: { type: 'Point', coordinates: [106.7, 10.8] }, properties: {
+        '@type': 'way', '@id': 'way/VN-ward', 'addr:housenumber': '10',
+        'addr:street': 'Đường Nguồn', 'addr:state': 'Thành phố Hồ Chí Minh',
+        'addr:ward': 'Phường Bến Thành', 'addr:postcode': '70000', building: 'house'
+      }
+    }, { id: 'fixture-VN-ward', countryCode: 'VN', source: { ...source, adapter: 'geofabrik' } }, 'geofabrik-geojsonseq');
+    expect(record.components).toMatchObject({
+      admin1: 'Thành phố Hồ Chí Minh', locality: 'Phường Bến Thành', district: ''
+    });
+  });
+
   it('normalizes Overture fields without inventing translated components', () => {
     const record = normalizeSourceRecord({
       id: 'overture-1', country: 'US', admin1: 'Pennsylvania', locality: 'Philadelphia',
@@ -1434,6 +1447,7 @@ describe('built-in ETL planning and publishing', () => {
     expect(overture).toContain('SET threads={worker_threads}');
     expect(overture).toContain('output_path.write_text("", encoding="utf-8")');
     expect(adapterSource).toContain("residential-buildings-v9");
+    expect(adapterSource).toContain("vn-two-tier-v1");
     expect(openAddresses).toContain('required_mapping = {"id", "number", "street", "district", "locality", "admin1", "postcode", "longitude", "latitude"}');
     expect(openAddresses).toContain('while len(selected) < candidate_limit:');
     expect(inegiResidential).toContain('normalized(row.get("TIPODOM")) != "VIVIENDA"');

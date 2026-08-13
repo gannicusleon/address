@@ -10,7 +10,11 @@ def _fold(value):
 
 def normalized_vietnamese_place(value):
     value = _fold(value).strip()
-    value = re.sub(r"^(?:tinh|tp\.?|thanh pho|xa|x\.?|phuong|p\.?)\s+", "", value)
+    value = re.sub(
+        r"^(?:tinh|tp\.?|thanh pho|xa|x\.?|phuong|p\.?|dac khu|thi tran)\s+",
+        "",
+        value
+    )
     return " ".join(re.sub(r"[^a-z0-9]+", " ", value).split())
 
 
