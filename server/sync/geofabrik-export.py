@@ -526,7 +526,8 @@ try:
             elif entity.is_area():
                 tags = {tag.k: tag.v for tag in entity.tags}
                 matcher.area(entity, tags)
-                if administrative_matcher is None and ADMINISTRATIVE_LEVELS.get(args.country):
+                if administrative_matcher is None and args.country != "VN" \
+                        and ADMINISTRATIVE_LEVELS.get(args.country):
                     administrative_matcher = AdministrativeBoundaryMatcher(args.country, matcher)
                 if administrative_matcher is not None:
                     administrative_matcher.area(entity, tags)
@@ -534,6 +535,18 @@ try:
         del processor
         if location_index:
             location_index.unlink(missing_ok=True)
+    if args.country == "VN":
+        administrative_matcher = AdministrativeBoundaryMatcher(args.country, matcher)
+        processor = osmium.FileProcessor(args.input).with_locations(location_storage) \
+            .with_areas(KeyFilter("boundary")).with_filter(KeyFilter("boundary"))
+        try:
+            for entity in processor:
+                if entity.is_area():
+                    administrative_matcher.area(entity, {tag.k: tag.v for tag in entity.tags})
+        finally:
+            del processor
+            if location_index:
+                location_index.unlink(missing_ok=True)
     selected_matches = matcher.selected_matches(args.max_records)
     if selected_matches or ADMINISTRATIVE_LEVELS.get(args.country):
         processor = osmium.FileProcessor(args.input).with_filter(KeyFilter("addr:housenumber", "addr:street", "addr:place"))

@@ -78,8 +78,6 @@ class VietnamPostcodes:
         self.unique_key_count = sum(len(postcodes) == 1 for postcodes in self.by_pair.values())
 
     def resolve(self, tags, longitude=None, latitude=None):
-        if str(tags.get("addr:postcode", "")).strip():
-            return None
         provinces = {
             normalized_vietnamese_place(tags.get(key, ""))
             for key in ("addr:province", "addr:state") if str(tags.get(key, "")).strip()

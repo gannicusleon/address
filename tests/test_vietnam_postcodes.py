@@ -46,10 +46,10 @@ class VietnamPostcodesTest(unittest.TestCase):
             "addr:province": "Tinh Dong Nai", "addr:commune": "Xa Loc Thanh"
         }))
         self.assertIsNone(postcodes.resolve({"addr:ward": "Phuong Ben Thanh"}))
-        self.assertIsNone(postcodes.resolve({
+        self.assertEqual(postcodes.resolve({
             "addr:province": "Thanh pho Ho Chi Minh", "addr:ward": "Phuong Ben Thanh",
             "addr:postcode": "70001"
-        }))
+        }), "70000")
 
     def test_normalizes_special_zone_prefixes(self):
         postcodes = VietnamPostcodes.from_rows([

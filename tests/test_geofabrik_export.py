@@ -128,6 +128,11 @@ class GeofabrikExportTest(unittest.TestCase):
     <tag k="admin_level" v="6"/>
     <tag k="name" v="Phường Mới"/>
   </relation>
+  <node id="6" version="1" lat="0.6" lon="0.6">
+    <tag k="addr:housenumber" v="13"/>
+    <tag k="addr:street" v="Đường Nguồn"/>
+    <tag k="building" v="house"/>
+  </node>
 </osm>
 """
         with tempfile.TemporaryDirectory() as directory:
@@ -140,9 +145,10 @@ class GeofabrikExportTest(unittest.TestCase):
             ], check=True, capture_output=True, text=True)
             records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
 
-        self.assertEqual(len(records), 1)
-        self.assertEqual(records[0]["properties"]["addr:state"], "Tỉnh Mới")
-        self.assertEqual(records[0]["properties"]["addr:ward"], "Phường Mới")
+        self.assertEqual(len(records), 2)
+        for record in records:
+            self.assertEqual(record["properties"]["addr:state"], "Tỉnh Mới")
+            self.assertEqual(record["properties"]["addr:ward"], "Phường Mới")
 
 
 if __name__ == "__main__":

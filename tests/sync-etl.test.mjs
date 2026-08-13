@@ -1447,7 +1447,7 @@ describe('built-in ETL planning and publishing', () => {
     expect(overture).toContain('SET threads={worker_threads}');
     expect(overture).toContain('output_path.write_text("", encoding="utf-8")');
     expect(adapterSource).toContain("residential-buildings-v9");
-    expect(adapterSource).toContain("vn-two-tier-v1");
+    expect(adapterSource).toContain("vn-two-tier-v2");
     expect(openAddresses).toContain('required_mapping = {"id", "number", "street", "district", "locality", "admin1", "postcode", "longitude", "latitude"}');
     expect(openAddresses).toContain('while len(selected) < candidate_limit:');
     expect(inegiResidential).toContain('normalized(row.get("TIPODOM")) != "VIVIENDA"');
