@@ -1411,6 +1411,7 @@ export const createSourceAdapters = ({
 
   const materializeGeofabrik = async (shard, discovery, options) => {
     const version = safeVersion(discovery.version);
+    const methodRevision = shard.countryCode === 'VN' ? vietnamGeofabrikExportRevision : undefined;
     const boundarySignature = [
       geofabrikExportRevision,
       shard.countryCode === 'VN' ? vietnamGeofabrikExportRevision : '',
@@ -1422,7 +1423,10 @@ export const createSourceAdapters = ({
     try {
       const size = (await stat(output)).size;
       if (discovery.postcodeFile && !options.retainRaw) await rm(discovery.postcodeFile, { force: true });
-      return { file: output, format: 'geofabrik-geojsonseq', cacheBytes: size, checksum: await sha256File(output), cacheHit: true };
+      return {
+        file: output, format: 'geofabrik-geojsonseq', cacheBytes: size, checksum: await sha256File(output),
+        cacheHit: true, methodRevision
+      };
     } catch {}
     const rawIdentity = createHash('sha256').update(`${discovery.dataUrl}\u001f${version}`).digest('hex').slice(0, 16);
     const raw = resolve(options.cacheDir, 'raw', `${rawIdentity}-${basename(new URL(discovery.dataUrl).pathname)}`);
@@ -1480,7 +1484,10 @@ export const createSourceAdapters = ({
       if (!options.retainRaw && !options.sharedRaw && completed) await rm(raw, { force: true });
     }
     const size = (await stat(output)).size;
-    return { file: output, format: 'geofabrik-geojsonseq', cacheBytes: size, checksum: await sha256File(output), sourceChecksum, cacheHit: false };
+    return {
+      file: output, format: 'geofabrik-geojsonseq', cacheBytes: size, checksum: await sha256File(output),
+      sourceChecksum, cacheHit: false, methodRevision
+    };
   };
 
   const materializeJapanAbr = async (shard, discovery, options) => {
