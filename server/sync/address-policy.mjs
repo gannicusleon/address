@@ -24,7 +24,7 @@ export const ADDRESS_POLICY_DEFAULTS = {
   TW: policy(10_000, [2_000, 300, 70, 0], ['County / city', 'District / township', 'Village', ''], 1, 200),
   KR: policy(20_000, [3_000, 500, 100, 0], ['Province / city', 'City / district', 'Neighborhood', ''], 1, 400),
   SG: policy(12_000, [12_000, 1_000, 100, 0], ['Planning region', 'Planning area', 'Locality', '']),
-  MY: policy(10_000, [1_500, 250, 60, 0], ['State / territory', 'District / city', 'Locality', ''], 0.6),
+  MY: policy(10_000, [1_800, 300, 70, 0], ['State / territory', 'District / city', 'Locality', ''], 0.6),
   TH: policy(10_000, [1_200, 250, 60, 0], ['Province', 'District', 'Subdistrict', ''], 0.6),
   PH: policy(10_000, [2_500, 500, 150, 40], ['Region', 'Province', 'City / municipality', 'Barangay'], 0.6),
   VN: policy(10_000, [1_200, 250, 60, 0], ['Province / municipality', 'District', 'Ward / commune', ''], 0.6),
@@ -50,6 +50,7 @@ const LEGACY_DEFAULT_LIMITS = {
   HK: [[2_000, 300, 80, 0]],
   KR: [[1_500, 250, 60, 0]],
   SG: [[8_000, 500, 80, 0]],
+  MY: [[1_500, 250, 60, 0]],
   ZA: [[1_500, 250, 60, 0]]
 };
 

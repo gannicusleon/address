@@ -56,6 +56,9 @@ describe('hierarchical address policies', () => {
       database.prepare(`INSERT INTO sync_country_policies(
         country_code,enabled,target_count,level1_limit,level2_limit,level3_limit,level4_limit,updated_at
       ) VALUES ('KR',1,10000,1500,250,60,0,'2026-07-01T00:00:00Z')`),
+      database.prepare(`INSERT INTO sync_country_policies(
+        country_code,enabled,target_count,level1_limit,level2_limit,level3_limit,level4_limit,updated_at
+      ) VALUES ('MY',1,10000,1500,250,60,0,'2026-07-01T00:00:00Z')`),
       database.prepare(`INSERT INTO sync_runtime_settings(id,prepare_concurrency,cpu_concurrency,updated_at)
         VALUES (1,10,3,'2026-07-01T00:00:00Z')`)
     ]);
@@ -77,6 +80,9 @@ describe('hierarchical address policies', () => {
     expect(await database.prepare(`SELECT target_count,level1_limit,level2_limit,level3_limit
       FROM sync_country_policies WHERE country_code=?`).bind('KR').first())
       .toMatchObject({ target_count: 20_000, level1_limit: 3_000, level2_limit: 500, level3_limit: 100 });
+    expect(await database.prepare(`SELECT target_count,level1_limit,level2_limit,level3_limit
+      FROM sync_country_policies WHERE country_code=?`).bind('MY').first())
+      .toMatchObject({ target_count: 10_000, level1_limit: 1_800, level2_limit: 300, level3_limit: 70 });
     expect(await database.prepare(`SELECT level1_limit,level2_limit,level3_limit,level4_limit
       FROM sync_country_policies WHERE country_code=?`).bind('SG').first())
       .toMatchObject({ level1_limit: 12_000, level2_limit: 1_000, level3_limit: 100, level4_limit: 0 });
