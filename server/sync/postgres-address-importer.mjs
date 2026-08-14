@@ -6,7 +6,8 @@ const cleanKey = (value) => String(value || '').normalize('NFKC').trim().toLocal
 const postcodeKey = (value) => cleanKey(value).replace(/\s/gu, '');
 const randomKey = (hash) => Number.parseInt(hash.slice(0, 8), 16) & 0x7fffffff;
 const expiry = (date) => new Date(date.getTime() + 180 * 24 * 60 * 60 * 1000).toISOString();
-const DEFAULT_MINIMUM_RATIO = 0.7;
+const DEFAULT_MINIMUM_RATIO = 0.95;
+const postalHierarchyCountries = new Set(['US', 'CA', 'AU', 'MX', 'IN', 'MY']);
 
 // Minimum administrative completeness per country. A record must carry at least
 // one region-level field and (where listed) a city-level field, else it is dropped.
@@ -232,7 +233,38 @@ const applyQualityGate = (record, countryCode, rebuildFormattedAddress) => {
   if (rebuildFormattedAddress) record.formattedAddress = rebuildFormattedAddress(record.components, countryCode);
   return quality;
 };
-export const ADDRESS_IMPORT_REVISION = 'strict-residential-v23';
+const reconcilePostalHierarchy = (record, geocoder, countryCode, rebuildFormattedAddress) => {
+  if (!postalHierarchyCountries.has(countryCode) || !geocoder?.postalAvailable) {
+    return { valid: true, corrected: false };
+  }
+  const resolution = geocoder.resolvePostalRegion(record);
+  if (resolution.status !== 'resolved') return { valid: false, reason: resolution.status };
+  const region = resolution.region;
+  const components = record.components;
+  const admin1 = region.native_name || region.name || '';
+  const admin1Code = region.code || '';
+  const corrected = foldAdmin1(components.admin1) !== foldAdmin1(admin1)
+    || foldAdmin1(components.admin1Code) !== foldAdmin1(admin1Code);
+  components.admin1 = admin1;
+  components.admin1Code = admin1Code;
+  record.admin1 = admin1;
+  record.admin1Code = admin1Code;
+  record.englishComponentHints = { ...(record.englishComponentHints || {}), admin1: region.name || admin1 };
+  if (region.zh_name) {
+    record.chineseComponentHints = { ...(record.chineseComponentHints || {}), admin1: region.zh_name };
+  }
+  if (rebuildFormattedAddress) record.formattedAddress = rebuildFormattedAddress(components, countryCode);
+  return { valid: true, corrected };
+};
+const refreshRecordIdentity = (record, hash) => {
+  const canonicalHash = hash([
+    record.countryCode, record.admin1, record.locality, record.postcode, record.street, record.houseNumber,
+    record.unit, Number(record.longitude).toFixed(6), Number(record.latitude).toFixed(6)
+  ].map((part) => String(part ?? '').replace(/\s+/gu, ' ').trim().toLocaleLowerCase('und')).join('\u001f'));
+  record.canonicalHash = canonicalHash;
+  record.id = `addr-${canonicalHash.slice(0, 40)}`;
+};
+export const ADDRESS_IMPORT_REVISION = 'strict-residential-v24';
 
 export class SourceQualityError extends Error {
   constructor(shardId, retrySignature, rejectionReasons, metrics = {}) {
@@ -419,6 +451,7 @@ export class PostgresAddressImporter {
     const seen = new Set();
     const candidates = [];
     let rejectedCount = 0;
+    let postalCorrections = 0;
     const rejectionReasons = new Map();
     const reject = (reasons) => {
       rejectedCount += 1;
@@ -427,12 +460,25 @@ export class PostgresAddressImporter {
     const geocoder = this.reverseGeocoder ? await this.reverseGeocoder(shard.countryCode) : null;
     for await (const value of readJsonLines(materialized.file)) {
       const record = this.normalizeRecord(value, shard, materialized.format);
-      if (!record || seen.has(record.canonicalHash)) {
-        reject([record ? 'duplicate' : 'invalid_source_record']);
+      if (!record) {
+        reject(['invalid_source_record']);
         continue;
       }
       if (!enrichAndValidate(record, geocoder, shard.countryCode, this.rebuildFormattedAddress)) {
         reject(['invalid_administrative_hierarchy']);
+        continue;
+      }
+      const postalHierarchy = reconcilePostalHierarchy(
+        record, geocoder, shard.countryCode, this.rebuildFormattedAddress
+      );
+      if (!postalHierarchy.valid) {
+        reject([postalHierarchy.reason]);
+        continue;
+      }
+      if (postalHierarchy.corrected) postalCorrections += 1;
+      refreshRecordIdentity(record, this.hash);
+      if (seen.has(record.canonicalHash)) {
+        reject(['duplicate']);
         continue;
       }
       const quality = applyQualityGate(record, shard.countryCode, this.rebuildFormattedAddress);
@@ -500,7 +546,7 @@ export class PostgresAddressImporter {
       ?? (previous ? Math.min(defaultMinimumRecords, Number(previous.active_count || 0) || 1) : 1);
     const minimumAdmin1 = configuredGate.minimumAdmin1
       ?? (previous ? Math.min(defaultMinimumAdmin1, Number(previous.admin1_count || 0)) : Math.min(defaultMinimumAdmin1, 1));
-    const minimumCountRatio = configuredGate.minimumCountRatio ?? DEFAULT_MINIMUM_RATIO;
+    const minimumCountRatio = Math.max(configuredGate.minimumCountRatio ?? DEFAULT_MINIMUM_RATIO, DEFAULT_MINIMUM_RATIO);
     const minimumAdmin1Ratio = configuredGate.minimumAdmin1Ratio ?? DEFAULT_MINIMUM_RATIO;
     const metrics = {
       candidateCount: localized.length,
@@ -514,13 +560,21 @@ export class PostgresAddressImporter {
       importRevision: ADDRESS_IMPORT_REVISION,
       methodRevision: materialized.methodRevision || null,
       policyHash,
+      postalCorrections,
       rejectionReasons: Object.fromEntries([...rejectionReasons].sort(([left], [right]) => left.localeCompare(right)))
     };
     const failures = [];
     if (metrics.candidateCount < minimumRecords) failures.push(`count ${metrics.candidateCount} < ${minimumRecords}`);
     if (metrics.candidateAdmin1Count < minimumAdmin1) failures.push(`admin1 coverage ${metrics.candidateAdmin1Count} < ${minimumAdmin1}`);
-    // Ratio gates only compare snapshots produced by the same import methodology; a revision
-    // change intentionally replaces the sampling/enrichment rules, so the old counts are not a baseline.
+    const previousCountFloor = Math.ceil(Math.min(
+      metrics.previousCount * minimumCountRatio,
+      effectiveMaxRecords * minimumCountRatio
+    ));
+    if (metrics.previousCount && metrics.candidateCount < previousCountFloor) {
+      failures.push(`count ${metrics.candidateCount} < protected previous floor ${previousCountFloor}`);
+    }
+    // Administrative coverage remains method-relative because revisions can intentionally
+    // normalize many aliases into a smaller canonical region set.
     const sameRevision = Boolean(
       previous?.id
       && (String(previous.version || '').endsWith(`-${ADDRESS_IMPORT_REVISION}`)
@@ -528,13 +582,6 @@ export class PostgresAddressImporter {
       && String(previous.id).endsWith(`-${ADDRESS_IMPORT_REVISION}-${policyHash}`)
     );
     if (sameRevision) {
-      const previousCountFloor = Math.ceil(Math.min(
-        metrics.previousCount * minimumCountRatio,
-        effectiveMaxRecords * minimumCountRatio
-      ));
-      if (metrics.previousCount && metrics.candidateCount < previousCountFloor) {
-        failures.push(`count ${metrics.candidateCount} < capped previous floor ${previousCountFloor}`);
-      }
       if (metrics.previousAdmin1Count && metrics.candidateAdmin1Count < Math.ceil(metrics.previousAdmin1Count * minimumAdmin1Ratio)) {
         failures.push(`admin1 ratio ${(metrics.candidateAdmin1Count / metrics.previousAdmin1Count).toFixed(3)} < ${minimumAdmin1Ratio}`);
       }

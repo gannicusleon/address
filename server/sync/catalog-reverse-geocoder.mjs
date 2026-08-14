@@ -47,6 +47,23 @@ const distanceScore = (lat1, lon1, lat2, lon2) => {
   return dLat * dLat + dLon * dLon;
 };
 
+const postalKey = (value) => String(value || '').normalize('NFKC').toUpperCase().replace(/\s+/gu, '');
+const postalKeys = (countryCode, value) => {
+  const exact = postalKey(value);
+  if (!exact) return [];
+  if (countryCode === 'US') {
+    const base = exact.match(/^\d{5}/u)?.[0];
+    return base && base !== exact ? [exact, base] : [exact];
+  }
+  if (countryCode === 'CA' && /^[A-Z]\d[A-Z]/u.test(exact)) {
+    const forwardSortationArea = exact.slice(0, 3);
+    return forwardSortationArea !== exact ? [exact, forwardSortationArea] : [exact];
+  }
+  return [exact];
+};
+const placeKey = (value) => String(value || '').normalize('NFKD').replace(/[\u0300-\u036f]/gu, '')
+  .toLocaleLowerCase('und').replace(/[^\p{L}\p{N}]+/gu, '');
+
 // Region names that must never appear for a given country (cross-border catalog leakage).
 const excludedRegionNames = {
   CN: [/香港/, /澳門/, /澳门/, /hong\s?kong/i, /macau/i, /macao/i, /台湾/, /臺灣/, /taiwan/i]
@@ -92,7 +109,7 @@ const spatialIndex = (entries) => {
 };
 
 export class CatalogReverseGeocoder {
-  constructor(countryCode, regions, cities) {
+  constructor(countryCode, regions, cities, postcodes = []) {
     this.countryCode = countryCode;
     this.anchorConfig = ANCHOR_CONFIG[countryCode] || null;
     const cityTierTypes = this.anchorConfig?.cityTypes
@@ -134,19 +151,33 @@ export class CatalogReverseGeocoder {
       [this.cityTier, spatialIndex(this.cityTier)],
       [this.districtTier, spatialIndex(this.districtTier)]
     ]);
+    this.postcodesByCode = new Map();
+    for (const postcode of postcodes) {
+      if (!this.regionsById.has(postcode.region_id)) continue;
+      for (const key of postalKeys(countryCode, postcode.code)) {
+        const bucket = this.postcodesByCode.get(key) || [];
+        bucket.push(postcode);
+        this.postcodesByCode.set(key, bucket);
+      }
+    }
   }
 
   static async load(database, countryCode) {
-    if (!database) return new CatalogReverseGeocoder(countryCode, [], []);
+    if (!database) return new CatalogReverseGeocoder(countryCode, [], [], []);
     try {
       const regions = (await database.prepare(`SELECT id, code, name, native_name, zh_name, type, latitude, longitude
         FROM catalog_regions WHERE country_code = ?`).bind(countryCode).all()).results || [];
       const cities = (await database.prepare(`SELECT name, native_name, zh_name, region_id, type, latitude, longitude
         FROM catalog_cities WHERE country_code = ? AND latitude IS NOT NULL AND longitude IS NOT NULL`)
         .bind(countryCode).all()).results || [];
-      return new CatalogReverseGeocoder(countryCode, regions, cities);
+      const postcodes = (await database.prepare(`SELECT p.code,p.locality_name,p.latitude,p.longitude,
+        COALESCE(p.region_id,c.region_id) AS region_id,c.name AS city_name,
+        c.native_name AS city_native,c.zh_name AS city_zh
+        FROM catalog_postcodes p LEFT JOIN catalog_cities c ON c.id=p.city_id
+        WHERE p.country_code=?`).bind(countryCode).all()).results || [];
+      return new CatalogReverseGeocoder(countryCode, regions, cities, postcodes);
     } catch {
-      return new CatalogReverseGeocoder(countryCode, [], []);
+      return new CatalogReverseGeocoder(countryCode, [], [], []);
     }
   }
 
@@ -156,6 +187,56 @@ export class CatalogReverseGeocoder {
 
   get hierarchyReady() {
     return this.cityTier.length > 0 && this.regions.length > 0;
+  }
+
+  get postalAvailable() {
+    return this.postcodesByCode.size > 0;
+  }
+
+  resolvePostalRegion(record) {
+    if (!this.postalAvailable) return { status: 'catalog_unavailable' };
+    const components = record.components || record;
+    const candidates = postalKeys(this.countryCode, components.postcode)
+      .map((key) => this.postcodesByCode.get(key))
+      .find((bucket) => bucket?.length) || [];
+    if (!candidates.length) return { status: 'postcode_not_in_catalog' };
+    const regions = new Map();
+    for (const candidate of candidates) {
+      const region = this.regionsById.get(candidate.region_id);
+      if (region) regions.set(region.id, region);
+    }
+    if (regions.size === 1) return { status: 'resolved', region: [...regions.values()][0] };
+
+    const sourcePlaces = [components.locality, components.postalLocality]
+      .map(placeKey).filter(Boolean);
+    if (sourcePlaces.length) {
+      const matchingRegions = new Map();
+      for (const candidate of candidates) {
+        const names = [candidate.locality_name, candidate.city_name, candidate.city_native, candidate.city_zh]
+          .map(placeKey).filter(Boolean);
+        if (!names.some((name) => sourcePlaces.includes(name))) continue;
+        const region = this.regionsById.get(candidate.region_id);
+        if (region) matchingRegions.set(region.id, region);
+      }
+      if (matchingRegions.size === 1) return { status: 'resolved', region: [...matchingRegions.values()][0] };
+    }
+
+    const latitude = Number(record.latitude);
+    const longitude = Number(record.longitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return { status: 'ambiguous_postal_region' };
+    const ranked = candidates
+      .filter((candidate) => Number.isFinite(Number(candidate.latitude)) && Number.isFinite(Number(candidate.longitude)))
+      .map((candidate) => ({
+        candidate,
+        score: distanceScore(latitude, longitude, Number(candidate.latitude), Number(candidate.longitude))
+      }))
+      .sort((left, right) => left.score - right.score);
+    const best = ranked[0];
+    if (!best || best.score > 0.25) return { status: 'ambiguous_postal_region' };
+    const competing = ranked.find(({ candidate }) => candidate.region_id !== best.candidate.region_id);
+    if (competing && competing.score < best.score * 4) return { status: 'ambiguous_postal_region' };
+    const region = this.regionsById.get(best.candidate.region_id);
+    return region ? { status: 'resolved', region } : { status: 'ambiguous_postal_region' };
   }
 
   nearestFrom(pool, latitude, longitude, maxDegrees, predicate) {

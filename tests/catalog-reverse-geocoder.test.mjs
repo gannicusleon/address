@@ -92,6 +92,60 @@ describe('catalog reverse geocoder', () => {
     expect(geocoder.available).toBe(false);
     expect(geocoder.lookup({ latitude: 22.5, longitude: 114, components: {} })).toEqual({});
   });
+
+  it('resolves a postcode to its canonical region instead of trusting source admin1', () => {
+    const malaysiaRegions = [
+      { id: 10, code: '10', name: 'Selangor', native_name: 'Selangor', zh_name: '雪兰莪', latitude: 3.1, longitude: 101.5 },
+      { id: 16, code: '16', name: 'Putrajaya', native_name: 'Putrajaya', zh_name: '布城', latitude: 2.93, longitude: 101.69 }
+    ];
+    const postcodes = [{
+      code: '43000', locality_name: 'Kajang', city_name: 'Kajang', city_native: 'Kajang', city_zh: '',
+      region_id: 10, latitude: 2.99, longitude: 101.79
+    }];
+    const geocoder = new CatalogReverseGeocoder('MY', malaysiaRegions, [], postcodes);
+
+    expect(geocoder.resolvePostalRegion({
+      latitude: 2.99, longitude: 101.79,
+      components: { postcode: '43000', locality: 'Kajang', admin1: 'Putrajaya', admin1Code: '16' }
+    })).toMatchObject({ status: 'resolved', region: { code: '10', name: 'Selangor' } });
+    expect(geocoder.resolvePostalRegion({ components: { postcode: '99999', locality: 'Nowhere' } }))
+      .toEqual({ status: 'postcode_not_in_catalog' });
+  });
+
+  it('uses locality to disambiguate a postcode shared by multiple regions', () => {
+    const sharedRegions = [
+      { id: 1, code: 'AA', name: 'Alpha', native_name: 'Alpha', zh_name: '', latitude: 1, longitude: 1 },
+      { id: 2, code: 'BB', name: 'Beta', native_name: 'Beta', zh_name: '', latitude: 2, longitude: 2 }
+    ];
+    const postcodes = [
+      { code: '12345', locality_name: 'Northville', city_name: 'Northville', region_id: 1, latitude: 1, longitude: 1 },
+      { code: '12345', locality_name: 'Southville', city_name: 'Southville', region_id: 2, latitude: 2, longitude: 2 }
+    ];
+    const geocoder = new CatalogReverseGeocoder('US', sharedRegions, [], postcodes);
+
+    expect(geocoder.resolvePostalRegion({ components: { postcode: '12345', locality: 'Southville' } }))
+      .toMatchObject({ status: 'resolved', region: { code: 'BB' } });
+    expect(geocoder.resolvePostalRegion({ components: { postcode: '12345', locality: 'Unknown' } }))
+      .toEqual({ status: 'ambiguous_postal_region' });
+  });
+
+  it('uses canonical postal prefixes for US ZIP+4 and Canadian FSA data', () => {
+    const northAmerica = [
+      { id: 1, code: 'NY', name: 'New York', native_name: 'New York', zh_name: '', latitude: 43, longitude: -75 },
+      { id: 2, code: 'ON', name: 'Ontario', native_name: 'Ontario', zh_name: '', latitude: 50, longitude: -85 }
+    ];
+    const us = new CatalogReverseGeocoder('US', [northAmerica[0]], [], [
+      { code: '11217', locality_name: 'Brooklyn', region_id: 1, latitude: 40.68, longitude: -73.98 }
+    ]);
+    const ca = new CatalogReverseGeocoder('CA', [northAmerica[1]], [], [
+      { code: 'M5V', locality_name: 'Toronto', region_id: 2, latitude: 43.64, longitude: -79.39 }
+    ]);
+
+    expect(us.resolvePostalRegion({ components: { postcode: '11217-1234' } }))
+      .toMatchObject({ status: 'resolved', region: { code: 'NY' } });
+    expect(ca.resolvePostalRegion({ components: { postcode: 'M5V 3A8' } }))
+      .toMatchObject({ status: 'resolved', region: { code: 'ON' } });
+  });
 });
 
 describe('coordinate-anchored hierarchy', () => {

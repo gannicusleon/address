@@ -1543,7 +1543,7 @@ describe('built-in ETL planning and publishing', () => {
     expect(result).toMatchObject({
       acceptedCount: 1, rejectedCount: 1, localityCount: 1, skipped: false,
       rejectionReasons: { missing_residential_evidence: 1 },
-      metrics: expect.objectContaining({ importRevision: 'strict-residential-v23' })
+      metrics: expect.objectContaining({ importRevision: 'strict-residential-v24' })
     });
     expect(await database.prepare('SELECT status,active_count FROM address_datasets WHERE id=?').bind(result.datasetId).first())
       .toMatchObject({ status: 'active', active_count: 1 });
@@ -1658,7 +1658,7 @@ describe('built-in ETL planning and publishing', () => {
     database.close();
   });
 
-  it('rejects a sharply degraded same-method snapshot and permits a revised materialization method', async () => {
+  it('rejects a sharply degraded snapshot even when the materialization method changes', async () => {
     const directory = resolve('.data-cache', 'sync-etl-tests', randomUUID());
     directories.push(directory);
     await mkdir(directory, { recursive: true });
@@ -1699,18 +1699,20 @@ describe('built-in ETL planning and publishing', () => {
     })).rejects.toMatchObject({
       code: 'SNAPSHOT_QUALITY_FAILED',
       rejectionReasons: {},
-      metrics: expect.objectContaining({ candidateCount: 1, rejectionReasons: {} })
+      metrics: expect.objectContaining({ candidateCount: 1, minimumCountRatio: 0.95, rejectionReasons: {} })
     });
     expect(await database.prepare("SELECT id FROM address_datasets WHERE status='active'").first('id')).toBe(first.datasetId);
     expect(await database.prepare('SELECT COUNT(*) count FROM address_pool_runtime').first('count')).toBe(4);
 
-    const revised = await importer.importShard({
+    await expect(importer.importShard({
       shard, discovery: { version: 'v3', dataUrl: source.dataUrl },
       materialized: { file, format: 'overture-jsonl', checksum: '3'.repeat(64), methodRevision: 'method-v9' },
       maxRecords: 10, perLocality: 10
+    })).rejects.toMatchObject({
+      code: 'SNAPSHOT_QUALITY_FAILED',
+      metrics: expect.objectContaining({ candidateCount: 1, minimumCountRatio: 0.95 })
     });
-    expect(revised).toMatchObject({ acceptedCount: 1, skipped: false });
-    expect(await database.prepare("SELECT id FROM address_datasets WHERE status='active'").first('id')).toBe(revised.datasetId);
+    expect(await database.prepare("SELECT id FROM address_datasets WHERE status='active'").first('id')).toBe(first.datasetId);
     database.close();
   });
 
