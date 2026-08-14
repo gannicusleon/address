@@ -27,7 +27,7 @@ const integer = (value, fallback, minimum, maximum) => {
   return Number.isInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
 };
 export const syncPostgresStatementTimeout = (environment = {}) => integer(
-  environment.ADDRESS_SYNC_POSTGRES_STATEMENT_TIMEOUT_MS, 15 * 60_000, 30_000, 3 * 60 * 60_000
+  environment.ADDRESS_SYNC_POSTGRES_STATEMENT_TIMEOUT_MS, 3 * 60 * 60_000, 30_000, 3 * 60 * 60_000
 );
 const delay = (milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
 const processIsAlive = (pid) => {

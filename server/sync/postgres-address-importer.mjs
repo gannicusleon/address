@@ -615,10 +615,9 @@ export class PostgresAddressImporter {
           .bind(localized.length, rejectedCount, datasetId),
         this.database.prepare(`UPDATE address_pool SET active=0,retired_at=?
           WHERE country_code=? AND active=1 AND id NOT IN (
-            SELECT evidence.address_id FROM address_pool scoped
-            JOIN address_pool_evidence evidence ON evidence.address_id=scoped.id
+            SELECT evidence.address_id FROM address_pool_evidence evidence
             JOIN address_datasets dataset ON dataset.id=evidence.dataset_id
-            WHERE scoped.country_code=? AND evidence.is_current=1
+            WHERE dataset.country_code=? AND evidence.is_current=1
               AND dataset.status IN ('pending','active')
           )`).bind(observedAt, shard.countryCode, shard.countryCode),
         this.database.prepare(`UPDATE address_pool SET active=1,retired_at=NULL
@@ -714,9 +713,9 @@ export class PostgresAddressImporter {
           .bind(shard.source.id, shard.countryCode),
         this.database.prepare(`DELETE FROM address_pool WHERE country_code=? AND active=0
           AND id NOT IN (
-            SELECT evidence.address_id FROM address_pool scoped
-            JOIN address_pool_evidence evidence ON evidence.address_id=scoped.id
-            WHERE scoped.country_code=?
+            SELECT evidence.address_id FROM address_pool_evidence evidence
+            JOIN address_datasets dataset ON dataset.id=evidence.dataset_id
+            WHERE dataset.country_code=?
           )`).bind(shard.countryCode, shard.countryCode)
       ]);
       await this.database.exec('COMMIT');

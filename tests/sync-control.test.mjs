@@ -241,9 +241,9 @@ describe('sync management API', () => {
 
 describe('atomic address release command', () => {
   it('gives offline PostgreSQL imports a bounded timeout independent from API queries', () => {
-    expect(syncPostgresStatementTimeout({})).toBe(900_000);
+    expect(syncPostgresStatementTimeout({})).toBe(10_800_000);
     expect(syncPostgresStatementTimeout({ ADDRESS_SYNC_POSTGRES_STATEMENT_TIMEOUT_MS: '1200000' })).toBe(1_200_000);
-    expect(syncPostgresStatementTimeout({ ADDRESS_SYNC_POSTGRES_STATEMENT_TIMEOUT_MS: '0' })).toBe(900_000);
+    expect(syncPostgresStatementTimeout({ ADDRESS_SYNC_POSTGRES_STATEMENT_TIMEOUT_MS: '0' })).toBe(10_800_000);
   });
 
   it('rejects a synchronization process before materialization when free memory is below the configured floor', () => {
