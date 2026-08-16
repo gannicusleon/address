@@ -241,7 +241,10 @@ const reconcilePostalHierarchy = (record, geocoder, countryCode, rebuildFormatte
   if (resolution.status !== 'resolved') return { valid: false, reason: resolution.status };
   const region = resolution.region;
   const components = record.components;
-  const admin1 = region.native_name || region.name || '';
+  // US catalog native_name has contained truncated/corrupt labels (for example
+  // "Down" for Alaska). USPS state names/codes are English, so name is the
+  // authoritative label for US reconciliation.
+  const admin1 = countryCode === 'US' ? (region.name || region.native_name || '') : (region.native_name || region.name || '');
   const admin1Code = region.code || '';
   const corrected = foldAdmin1(components.admin1) !== foldAdmin1(admin1)
     || foldAdmin1(components.admin1Code) !== foldAdmin1(admin1Code);
@@ -264,7 +267,7 @@ const refreshRecordIdentity = (record, hash) => {
   record.canonicalHash = canonicalHash;
   record.id = `addr-${canonicalHash.slice(0, 40)}`;
 };
-export const ADDRESS_IMPORT_REVISION = 'strict-residential-v24';
+export const ADDRESS_IMPORT_REVISION = 'strict-residential-v25';
 
 export class SourceQualityError extends Error {
   constructor(shardId, retrySignature, rejectionReasons, metrics = {}) {
@@ -546,7 +549,14 @@ export class PostgresAddressImporter {
       ?? (previous ? Math.min(defaultMinimumRecords, Number(previous.active_count || 0) || 1) : 1);
     const minimumAdmin1 = configuredGate.minimumAdmin1
       ?? (previous ? Math.min(defaultMinimumAdmin1, Number(previous.admin1_count || 0)) : Math.min(defaultMinimumAdmin1, 1));
-    const minimumCountRatio = Math.max(configuredGate.minimumCountRatio ?? DEFAULT_MINIMUM_RATIO, DEFAULT_MINIMUM_RATIO);
+    const previousUsesCurrentRevision = Boolean(previous?.id
+      && (String(previous.version || '').endsWith(`-${ADDRESS_IMPORT_REVISION}`)
+        || String(previous.version || '').includes(`-${ADDRESS_IMPORT_REVISION}-`)));
+    // IN v25 adds postal-coordinate validation and canonical state reconciliation.
+    // Permit this one migration to replace the older pool when at least 85% remains;
+    // subsequent v25 refreshes retain the normal 95% protection.
+    const migrationMinimumRatio = shard.countryCode === 'IN' && previous?.id && !previousUsesCurrentRevision ? 0.85 : DEFAULT_MINIMUM_RATIO;
+    const minimumCountRatio = Math.max(configuredGate.minimumCountRatio ?? migrationMinimumRatio, migrationMinimumRatio);
     const minimumAdmin1Ratio = configuredGate.minimumAdmin1Ratio ?? DEFAULT_MINIMUM_RATIO;
     const metrics = {
       candidateCount: localized.length,
@@ -577,8 +587,7 @@ export class PostgresAddressImporter {
     // normalize many aliases into a smaller canonical region set.
     const sameRevision = Boolean(
       previous?.id
-      && (String(previous.version || '').endsWith(`-${ADDRESS_IMPORT_REVISION}`)
-        || String(previous.version || '').includes(`-${ADDRESS_IMPORT_REVISION}-`))
+      && previousUsesCurrentRevision
       && String(previous.id).endsWith(`-${ADDRESS_IMPORT_REVISION}-${policyHash}`)
     );
     if (sameRevision) {

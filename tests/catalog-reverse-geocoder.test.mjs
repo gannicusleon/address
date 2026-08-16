@@ -146,6 +146,33 @@ describe('catalog reverse geocoder', () => {
     expect(ca.resolvePostalRegion({ components: { postcode: 'M5V 3A8' } }))
       .toMatchObject({ status: 'resolved', region: { code: 'ON' } });
   });
+
+  it('resolves USPS territory prefixes missing from the location catalog', () => {
+    const geocoder = new CatalogReverseGeocoder('US', [
+      { id: 1, code: 'NY', name: 'New York', native_name: 'New York', latitude: 43, longitude: -75 }
+    ], [], [{ code: '11217', region_id: 1, latitude: 40.68, longitude: -73.98 }]);
+
+    expect(geocoder.resolvePostalRegion({ components: { postcode: '00601' } }))
+      .toMatchObject({ status: 'resolved', region: { code: 'PR', name: 'Puerto Rico' } });
+    expect(geocoder.resolvePostalRegion({ components: { postcode: '00802-1234' } }))
+      .toMatchObject({ status: 'resolved', region: { code: 'VI', name: 'U.S. Virgin Islands' } });
+  });
+
+  it('rejects an Indian postcode whose coordinate is implausibly far away', () => {
+    const indiaRegions = [
+      { id: 1, code: 'MH', name: 'Maharashtra', native_name: 'महाराष्ट्र', latitude: 19.75, longitude: 75.71 }
+    ];
+    const geocoder = new CatalogReverseGeocoder('IN', indiaRegions, [], [
+      { code: '400001', locality_name: 'Mumbai', region_id: 1, latitude: 18.94, longitude: 72.84 }
+    ]);
+
+    expect(geocoder.resolvePostalRegion({
+      latitude: 30.667, longitude: 76.76, components: { postcode: '400001', locality: 'Mohali' }
+    })).toEqual({ status: 'postcode_coordinate_mismatch' });
+    expect(geocoder.resolvePostalRegion({
+      latitude: 19.08, longitude: 72.88, components: { postcode: '400001', locality: 'Mumbai' }
+    })).toMatchObject({ status: 'resolved', region: { code: 'MH' } });
+  });
 });
 
 describe('coordinate-anchored hierarchy', () => {

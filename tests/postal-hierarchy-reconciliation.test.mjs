@@ -78,4 +78,37 @@ describe('postal hierarchy reconciliation', () => {
       .toMatchObject({ admin1: 'Selangor', admin1_code: '10', postcode: '43000' });
     database.close();
   });
+
+  it('uses the canonical US state name when catalog native_name is corrupt', async () => {
+    const database = openTestDatabase(':memory:');
+    await database.prepare(`INSERT INTO catalog_regions(
+      id,country_code,code,name,native_name,zh_name,type,path,latitude,longitude
+    ) VALUES (20,'US','AK','Alaska','Down','','state','Alaska',64.2,-152.3)`).run();
+    await database.prepare(`INSERT INTO catalog_postcodes(
+      id,country_code,region_id,city_id,code,locality_name,latitude,longitude
+    ) VALUES (2000,'US',20,NULL,'99501','Anchorage',61.22,-149.9)`).run();
+    const directory = resolve('.data-cache', 'postal-hierarchy-tests', randomUUID());
+    directories.push(directory);
+    await mkdir(directory, { recursive: true });
+    const file = resolve(directory, 'fixture-us.jsonl');
+    await writeFile(file, `${JSON.stringify({
+      id: 'ak-1', country: 'US', admin1: 'Down', locality: 'Anchorage', postal_city: 'Anchorage',
+      address_levels: ['Down', 'Anchorage'], postcode: '99501', street: 'E 5th Ave', number: '100',
+      longitude: -149.9, latitude: 61.22, property_type: 'residential',
+      residential_building_id: 'building-ak-1', residential_building_class: 'house'
+    })}\n`, 'utf8');
+    const usSource = { ...source, id: 'fixture-us' };
+
+    const result = await createImporter(database).importShard({
+      shard: { id: 'fixture-us', countryCode: 'US', source: usSource },
+      discovery: { version: 'v1', dataUrl: usSource.dataUrl },
+      materialized: { file, format: 'overture-jsonl', checksum: 'b'.repeat(64) },
+      maxRecords: 10, perLocality: 10
+    });
+
+    expect(result.acceptedCount).toBe(1);
+    expect(await database.prepare(`SELECT admin1,admin1_code,postcode FROM address_pool_runtime`).first())
+      .toMatchObject({ admin1: 'Alaska', admin1_code: 'AK', postcode: '99501' });
+    database.close();
+  });
 });

@@ -147,7 +147,7 @@ describe('country sync planning', () => {
       syncMode: 'manual', measureStorage: async () => 0 })).rejects.toThrow('Address sync failed for 1 country shard');
     expect(persisted.shards['fixture-us']).toMatchObject({
       errorCode: 'SOURCE_QUALITY_FAILED',
-      failureSignature: expect.stringMatching(/fixture-v1:residential-buildings=0:building-assets=0:import=strict-residential-v24:policy=/u),
+      failureSignature: expect.stringMatching(/fixture-v1:residential-buildings=0:building-assets=0:import=strict-residential-v25:policy=/u),
       rejectionReasons: { missing_residential_evidence: 4 },
       metrics: { candidateCount: 0, rejectedCount: 4 }
     });

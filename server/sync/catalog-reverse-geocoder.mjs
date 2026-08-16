@@ -48,6 +48,18 @@ const distanceScore = (lat1, lon1, lat2, lon2) => {
 };
 
 const postalKey = (value) => String(value || '').normalize('NFKC').toUpperCase().replace(/\s+/gu, '');
+const postalCoordinateLimitsKm = new Map([['IN', 250]]);
+const usTerritoryPostalRegions = [
+  { prefixes: ['006', '007', '009'], region: { id: 'US-PR', code: 'PR', name: 'Puerto Rico', native_name: 'Puerto Rico', zh_name: '波多黎各' } },
+  { prefixes: ['008'], region: { id: 'US-VI', code: 'VI', name: 'U.S. Virgin Islands', native_name: 'U.S. Virgin Islands', zh_name: '美属维尔京群岛' } }
+];
+const haversineKm = (lat1, lon1, lat2, lon2) => {
+  const dLat = (lat2 - lat1) * RADIANS;
+  const dLon = (lon2 - lon1) * RADIANS;
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1 * RADIANS) * Math.cos(lat2 * RADIANS) * Math.sin(dLon / 2) ** 2;
+  return 6371.0088 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
 const postalKeys = (countryCode, value) => {
   const exact = postalKey(value);
   if (!exact) return [];
@@ -199,7 +211,31 @@ export class CatalogReverseGeocoder {
     const candidates = postalKeys(this.countryCode, components.postcode)
       .map((key) => this.postcodesByCode.get(key))
       .find((bucket) => bucket?.length) || [];
-    if (!candidates.length) return { status: 'postcode_not_in_catalog' };
+    if (!candidates.length) {
+      if (this.countryCode === 'US') {
+        const postcode = postalKey(components.postcode).match(/^\d{5}/u)?.[0] || '';
+        const territory = usTerritoryPostalRegions.find(({ prefixes }) =>
+          prefixes.some((prefix) => postcode.startsWith(prefix)));
+        if (territory) return { status: 'resolved', region: territory.region };
+      }
+      return { status: 'postcode_not_in_catalog' };
+    }
+    const coordinateLimitKm = postalCoordinateLimitsKm.get(this.countryCode);
+    if (coordinateLimitKm) {
+      const latitude = Number(record.latitude);
+      const longitude = Number(record.longitude);
+      const rankedDistances = candidates
+        .filter((candidate) => candidate.latitude != null && candidate.longitude != null
+          && String(candidate.latitude).trim() && String(candidate.longitude).trim()
+          && Number.isFinite(Number(candidate.latitude)) && Number.isFinite(Number(candidate.longitude)))
+        .map((candidate) => haversineKm(
+          latitude, longitude, Number(candidate.latitude), Number(candidate.longitude)
+        ));
+      if (Number.isFinite(latitude) && Number.isFinite(longitude)
+        && rankedDistances.length && Math.min(...rankedDistances) > coordinateLimitKm) {
+        return { status: 'postcode_coordinate_mismatch' };
+      }
+    }
     const regions = new Map();
     for (const candidate of candidates) {
       const region = this.regionsById.get(candidate.region_id);
