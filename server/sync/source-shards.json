@@ -819,7 +819,7 @@
         { "countryCode": "US", "shardId": "ut", "name": "Utah", "extractId": "us/utah" },
         { "countryCode": "US", "shardId": "vt", "name": "Vermont", "extractId": "us/vermont" },
         { "countryCode": "US", "shardId": "va", "name": "Virginia", "extractId": "us/virginia" },
-        { "countryCode": "US", "shardId": "vi", "name": "US Virgin Islands", "extractId": "us/us-virgin-islands" },
+        { "countryCode": "US", "shardId": "vi", "name": "US Virgin Islands", "extractId": "us/us-virgin-islands", "qualityGate": { "minimumRecords": 1, "minimumAdmin1": 1, "minimumCountRatio": 0, "minimumAdmin1Ratio": 0 } },
         { "countryCode": "US", "shardId": "wa", "name": "Washington", "extractId": "us/washington" },
         { "countryCode": "US", "shardId": "wv", "name": "West Virginia", "extractId": "us/west-virginia" },
         { "countryCode": "US", "shardId": "wi", "name": "Wisconsin", "extractId": "us/wisconsin" },

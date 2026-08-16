@@ -135,6 +135,9 @@ describe('address source shard catalog', () => {
       extractId: 'us/california', maxRecords: 3000,
       source: { id: 'geofabrik-osm-us-ca' }
     });
+    expect(catalog.shards.find((shard) => shard.id === 'geofabrik-osm-us-vi')).toMatchObject({
+      extractId: 'us/us-virgin-islands', qualityGate: { minimumRecords: 1, minimumAdmin1: 1 }
+    });
     expect(catalog.shards.find((shard) => shard.id === 'geofabrik-osm-de-hb')).toMatchObject({
       extractId: 'bremen', maxRecords: 3000, source: { id: 'geofabrik-osm-de-hb' }
     });
