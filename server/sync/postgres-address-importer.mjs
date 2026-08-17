@@ -7,7 +7,7 @@ const postcodeKey = (value) => cleanKey(value).replace(/\s/gu, '');
 const randomKey = (hash) => Number.parseInt(hash.slice(0, 8), 16) & 0x7fffffff;
 const expiry = (date) => new Date(date.getTime() + 180 * 24 * 60 * 60 * 1000).toISOString();
 const DEFAULT_MINIMUM_RATIO = 0.95;
-const postalHierarchyCountries = new Set(['US', 'CA', 'AU', 'MX', 'IN', 'MY']);
+const postalHierarchyCountries = new Set(['US', 'CA', 'AU', 'DE', 'MX', 'IN', 'MY', 'PH']);
 
 // Minimum administrative completeness per country. A record must carry at least
 // one region-level field and (where listed) a city-level field, else it is dropped.
@@ -241,11 +241,17 @@ const reconcilePostalHierarchy = (record, geocoder, countryCode, rebuildFormatte
   if (resolution.status !== 'resolved') return { valid: false, reason: resolution.status };
   const region = resolution.region;
   const components = record.components;
+  const compatiblePhilippineProvince = countryCode === 'PH'
+    ? geocoder.moreSpecificCompatibleSourceRegion(region, components.admin1, components.admin1Code)
+    : null;
+  const effectiveRegion = compatiblePhilippineProvince || region;
   // US catalog native_name has contained truncated/corrupt labels (for example
   // "Down" for Alaska). USPS state names/codes are English, so name is the
   // authoritative label for US reconciliation.
-  const admin1 = countryCode === 'US' ? (region.name || region.native_name || '') : (region.native_name || region.name || '');
-  const admin1Code = region.code || '';
+  const admin1 = countryCode === 'US'
+    ? (effectiveRegion.name || effectiveRegion.native_name || '')
+    : (effectiveRegion.native_name || effectiveRegion.name || '');
+  const admin1Code = effectiveRegion.code || '';
   const postalLocality = countryCode === 'MY' ? String(resolution.postalLocality || '').trim() : '';
   const corrected = foldAdmin1(components.admin1) !== foldAdmin1(admin1)
     || foldAdmin1(components.admin1Code) !== foldAdmin1(admin1Code)
@@ -258,11 +264,11 @@ const reconcilePostalHierarchy = (record, geocoder, countryCode, rebuildFormatte
   if (postalLocality) record.postalLocality = postalLocality;
   record.englishComponentHints = {
     ...(record.englishComponentHints || {}),
-    admin1: region.name || admin1,
+    admin1: effectiveRegion.name || admin1,
     ...(postalLocality ? { postalLocality: resolution.postalLocalityEn || postalLocality } : {})
   };
-  if (region.zh_name) {
-    record.chineseComponentHints = { ...(record.chineseComponentHints || {}), admin1: region.zh_name };
+  if (effectiveRegion.zh_name) {
+    record.chineseComponentHints = { ...(record.chineseComponentHints || {}), admin1: effectiveRegion.zh_name };
   }
   if (postalLocality && resolution.postalLocalityZh) {
     record.chineseComponentHints = {
@@ -280,7 +286,7 @@ const refreshRecordIdentity = (record, hash) => {
   record.canonicalHash = canonicalHash;
   record.id = `addr-${canonicalHash.slice(0, 40)}`;
 };
-export const ADDRESS_IMPORT_REVISION = 'strict-residential-v26';
+export const ADDRESS_IMPORT_REVISION = 'strict-residential-v27';
 
 export class SourceQualityError extends Error {
   constructor(shardId, retrySignature, rejectionReasons, metrics = {}) {

@@ -196,7 +196,7 @@ describe('floor-aware hierarchical allocation', () => {
     const policy = { targetCount: 10, levelLimits: [10, 10, 10, 0], overrides: new Map() };
     const first = await importWith(policy);
     expect(first).toMatchObject({ acceptedCount: 2, skipped: false });
-    expect(first.datasetId).toContain('strict-residential-v26');
+    expect(first.datasetId).toContain('strict-residential-v27');
     await expect(importWith(policy)).resolves.toMatchObject({ skipped: true });
     const refreshed = await importWith({ ...policy, nodeFloors: new Map([[a1Key('Pennsylvania'), 2]]) });
     expect(refreshed).toMatchObject({ acceptedCount: 2, skipped: false });

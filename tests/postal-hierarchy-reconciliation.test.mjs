@@ -144,4 +144,86 @@ describe('postal hierarchy reconciliation', () => {
       .toMatchObject({ admin1: 'Alaska', admin1_code: 'AK', postcode: '99501' });
     database.close();
   });
+
+  it('corrects a German state that conflicts with the postcode catalog', async () => {
+    const database = openTestDatabase(':memory:');
+    await database.prepare(`INSERT INTO catalog_regions(
+      id,country_code,code,name,native_name,zh_name,type,path,latitude,longitude
+    ) VALUES (30,'DE','NI','Lower Saxony','Niedersachsen','','state','Lower Saxony',52.6,9.8),
+      (31,'DE','NW','North Rhine-Westphalia','Nordrhein-Westfalen','','state','North Rhine-Westphalia',51.5,7.5)`).run();
+    await database.prepare(`INSERT INTO catalog_postcodes(
+      id,country_code,region_id,city_id,code,locality_name,latitude,longitude
+    ) VALUES (3000,'DE',30,NULL,'49219','Glandorf',52.08,8.00)`).run();
+    const directory = resolve('.data-cache', 'postal-hierarchy-tests', randomUUID());
+    directories.push(directory);
+    await mkdir(directory, { recursive: true });
+    const file = resolve(directory, 'fixture-de.jsonl');
+    await writeFile(file, `${JSON.stringify({
+      id: 'de-1', country: 'DE', admin1: 'Nordrhein-Westfalen', locality: 'Glandorf', postal_city: 'Glandorf',
+      address_levels: ['Nordrhein-Westfalen', 'Glandorf'], postcode: '49219', street: 'Münsterstraße', number: '10',
+      longitude: 8.00, latitude: 52.08, property_type: 'residential',
+      residential_building_id: 'building-de-1', residential_building_class: 'house'
+    })}\n`, 'utf8');
+
+    const result = await createImporter(database).importShard({
+      shard: { id: 'fixture-de', countryCode: 'DE', source: { ...source, id: 'fixture-de' } },
+      discovery: { version: 'v1', dataUrl: source.dataUrl },
+      materialized: { file, format: 'overture-jsonl', checksum: 'd'.repeat(64) },
+      maxRecords: 10, perLocality: 10
+    });
+
+    expect(result).toMatchObject({ acceptedCount: 1, metrics: expect.objectContaining({ postalCorrections: 1 }) });
+    expect(await database.prepare(`SELECT admin1,admin1_code FROM address_pool_runtime`).first())
+      .toMatchObject({ admin1: 'Niedersachsen', admin1_code: 'NI' });
+    database.close();
+  });
+
+  it('keeps a compatible Philippine province but corrects an unrelated region', async () => {
+    const database = openTestDatabase(':memory:');
+    await database.prepare(`INSERT INTO catalog_regions(
+      id,country_code,code,name,native_name,zh_name,type,parent_id,path,latitude,longitude
+    ) VALUES (40,'PH','07','Central Visayas','Central Visayas','','region',NULL,'Central Visayas',10.3,123.9),
+      (41,'PH','NER','Negros Oriental','Negros Oriental','','province',40,'Central Visayas/Negros Oriental',9.7,123.0),
+      (42,'PH','00','National Capital Region','National Capital Region','','region',NULL,'NCR',14.6,121.0),
+      (44,'PH','40','Calabarzon','Calabarzon','','region',NULL,'Calabarzon',14.1,121.2)`).run();
+    await database.prepare(`INSERT INTO catalog_regions(
+      id,country_code,code,name,native_name,zh_name,type,parent_id,path,latitude,longitude
+    ) VALUES (43,'PH','RIZ','Rizal','Rizal','','province',44,'Calabarzon/Rizal',14.6,121.2)`).run();
+    await database.prepare(`INSERT INTO catalog_postcodes(
+      id,country_code,region_id,city_id,code,locality_name,latitude,longitude
+    ) VALUES (4000,'PH',40,NULL,'6200','Dumaguete',9.31,123.31),
+      (4001,'PH',43,NULL,'1920','Taytay',14.57,121.13)`).run();
+    const directory = resolve('.data-cache', 'postal-hierarchy-tests', randomUUID());
+    directories.push(directory);
+    await mkdir(directory, { recursive: true });
+    const file = resolve(directory, 'fixture-ph.jsonl');
+    const rows = [{
+      id: 'ph-compatible', country: 'PH', admin1: 'Negros Oriental', admin1_code: 'NER',
+      locality: 'Dumaguete', postal_city: 'Dumaguete', address_levels: ['Negros Oriental', 'Dumaguete'],
+      postcode: '6200', street: 'Perdices Street', number: '10', longitude: 123.31, latitude: 9.31
+    }, {
+      id: 'ph-conflict', country: 'PH', admin1: 'National Capital Region', admin1_code: '00',
+      locality: 'Taytay', postal_city: 'Taytay', address_levels: ['National Capital Region', 'Taytay'],
+      postcode: '1920', street: 'Ortigas Avenue', number: '20', longitude: 121.13, latitude: 14.57
+    }].map((entry) => ({
+      ...entry, property_type: 'residential', residential_building_id: `building-${entry.id}`,
+      residential_building_class: 'house'
+    }));
+    await writeFile(file, `${rows.map(JSON.stringify).join('\n')}\n`, 'utf8');
+
+    const result = await createImporter(database).importShard({
+      shard: { id: 'fixture-ph', countryCode: 'PH', source: { ...source, id: 'fixture-ph' } },
+      discovery: { version: 'v1', dataUrl: source.dataUrl },
+      materialized: { file, format: 'overture-jsonl', checksum: 'e'.repeat(64) },
+      maxRecords: 10, perLocality: 10
+    });
+
+    expect(result.acceptedCount).toBe(2);
+    expect((await database.prepare(`SELECT admin1,admin1_code FROM address_pool_runtime ORDER BY admin1_code`).all()).results)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ admin1: 'Negros Oriental', admin1_code: 'NER' }),
+        expect.objectContaining({ admin1: 'Rizal', admin1_code: 'RIZ' })
+      ]));
+    database.close();
+  });
 });

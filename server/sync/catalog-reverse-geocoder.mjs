@@ -48,7 +48,9 @@ const distanceScore = (lat1, lon1, lat2, lon2) => {
 };
 
 const postalKey = (value) => String(value || '').normalize('NFKC').toUpperCase().replace(/\s+/gu, '');
-const postalCoordinateLimitsKm = new Map([['IN', 250]]);
+const postalCoordinateLimitsKm = new Map([
+  ['DE', 100], ['IN', 250], ['MY', 120], ['PH', 150]
+]);
 const usTerritoryPostalRegions = [
   { prefixes: ['006', '007', '009'], region: { id: 'US-PR', code: 'PR', name: 'Puerto Rico', native_name: 'Puerto Rico', zh_name: '波多黎各' } },
   { prefixes: ['008'], region: { id: 'US-VI', code: 'VI', name: 'U.S. Virgin Islands', native_name: 'U.S. Virgin Islands', zh_name: '美属维尔京群岛' } }
@@ -75,22 +77,57 @@ const postalKeys = (countryCode, value) => {
 };
 const placeKey = (value) => String(value || '').normalize('NFKD').replace(/[\u0300-\u036f]/gu, '')
   .toLocaleLowerCase('und').replace(/[^\p{L}\p{N}]+/gu, '');
-const resolvedPostalLocality = (candidates) => {
+const admin1Variants = (value) => {
+  const raw = String(value || '').normalize('NFKC').trim().toLocaleLowerCase('und');
+  const key = placeKey(raw);
+  if (!key) return [];
+  const withoutIsoPrefix = placeKey(raw.replace(/^[a-z]{2}[-_]/u, ''));
+  return withoutIsoPrefix && withoutIsoPrefix !== key ? [key, withoutIsoPrefix] : [key];
+};
+const postalLocality = (candidate) => {
+  const native = String(candidate.locality_name || candidate.city_native || candidate.city_name || '').trim();
+  if (!native) return null;
+  return {
+    key: placeKey(native), native,
+    en: String(candidate.city_name || candidate.locality_name || native).trim(),
+    zh: String(candidate.city_zh || '').trim()
+  };
+};
+const resolvedPostalLocality = (candidates, record) => {
   const names = new Map();
   for (const candidate of candidates) {
-    const native = String(candidate.locality_name || candidate.city_native || candidate.city_name || '').trim();
-    if (!native) continue;
-    const key = placeKey(native);
-    if (key && !names.has(key)) names.set(key, {
-      native,
-      en: String(candidate.city_name || candidate.locality_name || native).trim(),
-      zh: String(candidate.city_zh || '').trim()
-    });
+    const locality = postalLocality(candidate);
+    if (locality?.key && !names.has(locality.key)) names.set(locality.key, locality);
   }
-  return names.size === 1 ? [...names.values()][0] : null;
+  if (names.size === 1) return [...names.values()][0];
+
+  const components = record?.components || record || {};
+  const sourcePlaces = [components.postalLocality, components.locality].map(placeKey).filter(Boolean);
+  const sourceMatches = [...names.values()].filter(({ key }) => sourcePlaces.includes(key));
+  if (sourceMatches.length === 1) return sourceMatches[0];
+
+  const latitude = Number(record?.latitude);
+  const longitude = Number(record?.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  const nearestByLocality = new Map();
+  for (const candidate of candidates) {
+    const locality = postalLocality(candidate);
+    const candidateLatitude = Number(candidate.latitude);
+    const candidateLongitude = Number(candidate.longitude);
+    if (!locality?.key || !Number.isFinite(candidateLatitude) || !Number.isFinite(candidateLongitude)) continue;
+    const distance = haversineKm(latitude, longitude, candidateLatitude, candidateLongitude);
+    const existing = nearestByLocality.get(locality.key);
+    if (!existing || distance < existing.distance) nearestByLocality.set(locality.key, { ...locality, distance });
+  }
+  const ranked = [...nearestByLocality.values()].sort((left, right) => left.distance - right.distance);
+  const best = ranked[0];
+  if (!best || best.distance > 75) return null;
+  const competing = ranked[1];
+  if (competing && competing.distance <= Math.max(best.distance * 1.5, best.distance + 5)) return null;
+  return best;
 };
-const resolvedPostalRegion = (region, candidates) => {
-  const locality = resolvedPostalLocality(candidates);
+const resolvedPostalRegion = (region, candidates, record) => {
+  const locality = resolvedPostalLocality(candidates, record);
   return {
     status: 'resolved', region,
     ...(locality ? {
@@ -202,7 +239,7 @@ export class CatalogReverseGeocoder {
   static async load(database, countryCode) {
     if (!database) return new CatalogReverseGeocoder(countryCode, [], [], []);
     try {
-      const regions = (await database.prepare(`SELECT id, code, name, native_name, zh_name, type, latitude, longitude
+      const regions = (await database.prepare(`SELECT id, code, name, native_name, zh_name, type, parent_id, latitude, longitude
         FROM catalog_regions WHERE country_code = ?`).bind(countryCode).all()).results || [];
       const cities = (await database.prepare(`SELECT name, native_name, zh_name, region_id, type, latitude, longitude
         FROM catalog_cities WHERE country_code = ? AND latitude IS NOT NULL AND longitude IS NOT NULL`)
@@ -228,6 +265,36 @@ export class CatalogReverseGeocoder {
 
   get postalAvailable() {
     return this.postcodesByCode.size > 0;
+  }
+
+  sourceRegions(sourceAdmin1, sourceAdmin1Code) {
+    const sourceKeys = [...admin1Variants(sourceAdmin1Code), ...admin1Variants(sourceAdmin1)];
+    return [...this.regionsById.values()].filter((region) =>
+      [region.code, region.name, region.native_name, region.zh_name]
+        .some((value) => admin1Variants(value).some((key) => sourceKeys.includes(key))));
+  }
+
+  regionIsAncestor(ancestor, descendant) {
+    let current = descendant;
+    const visited = new Set();
+    while (current && !visited.has(current.id)) {
+      if (current.id === ancestor.id) return true;
+      visited.add(current.id);
+      current = current.parent_id == null ? null : this.regionsById.get(current.parent_id);
+    }
+    return false;
+  }
+
+  postalRegionCompatible(postalRegion, sourceAdmin1, sourceAdmin1Code) {
+    if (!postalRegion) return false;
+    return this.sourceRegions(sourceAdmin1, sourceAdmin1Code).some((sourceRegion) =>
+      this.regionIsAncestor(sourceRegion, postalRegion) || this.regionIsAncestor(postalRegion, sourceRegion));
+  }
+
+  moreSpecificCompatibleSourceRegion(postalRegion, sourceAdmin1, sourceAdmin1Code) {
+    if (!postalRegion) return null;
+    return this.sourceRegions(sourceAdmin1, sourceAdmin1Code).find((sourceRegion) =>
+      sourceRegion.id !== postalRegion.id && this.regionIsAncestor(postalRegion, sourceRegion)) || null;
   }
 
   resolvePostalRegion(record) {
@@ -266,7 +333,7 @@ export class CatalogReverseGeocoder {
       const region = this.regionsById.get(candidate.region_id);
       if (region) regions.set(region.id, region);
     }
-    if (regions.size === 1) return resolvedPostalRegion([...regions.values()][0], candidates);
+    if (regions.size === 1) return resolvedPostalRegion([...regions.values()][0], candidates, record);
 
     const sourcePlaces = [components.locality, components.postalLocality]
       .map(placeKey).filter(Boolean);
@@ -285,7 +352,7 @@ export class CatalogReverseGeocoder {
             .map(placeKey).filter(Boolean);
           return names.some((name) => sourcePlaces.includes(name));
         });
-        return resolvedPostalRegion([...matchingRegions.values()][0], matchingCandidates);
+        return resolvedPostalRegion([...matchingRegions.values()][0], matchingCandidates, record);
       }
     }
 
@@ -304,7 +371,7 @@ export class CatalogReverseGeocoder {
     const competing = ranked.find(({ candidate }) => candidate.region_id !== best.candidate.region_id);
     if (competing && competing.score < best.score * 4) return { status: 'ambiguous_postal_region' };
     const region = this.regionsById.get(best.candidate.region_id);
-    return region ? resolvedPostalRegion(region, [best.candidate]) : { status: 'ambiguous_postal_region' };
+    return region ? resolvedPostalRegion(region, [best.candidate], record) : { status: 'ambiguous_postal_region' };
   }
 
   nearestFrom(pool, latitude, longitude, maxDegrees, predicate) {

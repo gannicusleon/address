@@ -1546,7 +1546,7 @@ describe('built-in ETL planning and publishing', () => {
     expect(result).toMatchObject({
       acceptedCount: 1, rejectedCount: 1, localityCount: 1, skipped: false,
       rejectionReasons: { missing_residential_evidence: 1 },
-      metrics: expect.objectContaining({ importRevision: 'strict-residential-v26' })
+      metrics: expect.objectContaining({ importRevision: 'strict-residential-v27' })
     });
     expect(await database.prepare('SELECT status,active_count FROM address_datasets WHERE id=?').bind(result.datasetId).first())
       .toMatchObject({ status: 'active', active_count: 1 });

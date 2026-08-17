@@ -176,6 +176,34 @@ describe('catalog reverse geocoder', () => {
       latitude: 19.08, longitude: 72.88, components: { postcode: '400001', locality: 'Mumbai' }
     })).toMatchObject({ status: 'resolved', region: { code: 'MH' } });
   });
+
+  it('uses coordinates to resolve a postcode shared by multiple localities in one region', () => {
+    const malaysiaRegions = [
+      { id: 10, code: '10', name: 'Selangor', native_name: 'Selangor', parent_id: null, latitude: 3.1, longitude: 101.5 }
+    ];
+    const geocoder = new CatalogReverseGeocoder('MY', malaysiaRegions, [], [
+      { code: '47100', locality_name: 'Puchong', region_id: 10, latitude: 3.03, longitude: 101.62 },
+      { code: '47100', locality_name: 'Sungai Buloh', region_id: 10, latitude: 3.21, longitude: 101.58 }
+    ]);
+
+    expect(geocoder.resolvePostalRegion({
+      latitude: 3.055, longitude: 101.640,
+      components: { postcode: '47100', locality: 'Assam Jawa' }
+    })).toMatchObject({ status: 'resolved', region: { code: '10' }, postalLocality: 'Puchong' });
+  });
+
+  it('recognizes compatible parent and child postal regions', () => {
+    const philippinesRegions = [
+      { id: 1, code: '07', name: 'Central Visayas', native_name: 'Central Visayas', parent_id: null, latitude: 10.3, longitude: 123.9 },
+      { id: 2, code: 'NER', name: 'Negros Oriental', native_name: 'Negros Oriental', parent_id: 1, latitude: 9.7, longitude: 123.0 },
+      { id: 3, code: '00', name: 'National Capital Region', native_name: 'National Capital Region', parent_id: null, latitude: 14.6, longitude: 121.0 }
+    ];
+    const geocoder = new CatalogReverseGeocoder('PH', philippinesRegions, [], []);
+
+    expect(geocoder.postalRegionCompatible(philippinesRegions[0], 'Negros Oriental', 'NER')).toBe(true);
+    expect(geocoder.postalRegionCompatible(philippinesRegions[1], 'Central Visayas', '07')).toBe(true);
+    expect(geocoder.postalRegionCompatible(philippinesRegions[1], 'National Capital Region', '00')).toBe(false);
+  });
 });
 
 describe('coordinate-anchored hierarchy', () => {
