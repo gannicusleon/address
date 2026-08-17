@@ -8,6 +8,9 @@ const randomKey = (hash) => Number.parseInt(hash.slice(0, 8), 16) & 0x7fffffff;
 const expiry = (date) => new Date(date.getTime() + 180 * 24 * 60 * 60 * 1000).toISOString();
 const DEFAULT_MINIMUM_RATIO = 0.95;
 const postalHierarchyCountries = new Set(['US', 'CA', 'AU', 'DE', 'MX', 'IN', 'MY', 'PH']);
+const germanPostalMigrationShards = new Set([
+  'geofabrik-osm-de-by', 'geofabrik-osm-de-rp', 'geofabrik-osm-de-sh', 'geofabrik-osm-de-sn'
+]);
 
 // Minimum administrative completeness per country. A record must carry at least
 // one region-level field and (where listed) a city-level field, else it is dropped.
@@ -571,10 +574,13 @@ export class PostgresAddressImporter {
     const previousUsesCurrentRevision = Boolean(previous?.id
       && (String(previous.version || '').endsWith(`-${ADDRESS_IMPORT_REVISION}`)
         || String(previous.version || '').includes(`-${ADDRESS_IMPORT_REVISION}-`)));
-    // IN v25 adds postal-coordinate validation and canonical state reconciliation.
-    // Permit this one migration to replace the older pool when at least 85% remains;
-    // subsequent v25 refreshes retain the normal 95% protection.
-    const migrationMinimumRatio = shard.countryCode === 'IN' && previous?.id && !previousUsesCurrentRevision ? 0.85 : DEFAULT_MINIMUM_RATIO;
+    // Postal reconciliation intentionally removes or rekeys invalid legacy rows.
+    // Permit only the measured migration shards to replace their older pools;
+    // subsequent v27 refreshes retain the normal 95% protection.
+    const germanPostalMigration = shard.countryCode === 'DE'
+      && germanPostalMigrationShards.has(shard.id) && previous?.id && !previousUsesCurrentRevision;
+    const migrationMinimumRatio = shard.countryCode === 'IN' && previous?.id && !previousUsesCurrentRevision
+      ? 0.85 : germanPostalMigration ? 0.80 : DEFAULT_MINIMUM_RATIO;
     const minimumCountRatio = Math.max(configuredGate.minimumCountRatio ?? migrationMinimumRatio, migrationMinimumRatio);
     const minimumAdmin1Ratio = configuredGate.minimumAdmin1Ratio ?? DEFAULT_MINIMUM_RATIO;
     const metrics = {

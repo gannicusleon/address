@@ -226,4 +226,52 @@ describe('postal hierarchy reconciliation', () => {
       ]));
     database.close();
   });
+
+  it('permits the measured German v27 migration loss without weakening later snapshots', async () => {
+    const database = openTestDatabase(':memory:');
+    await database.prepare(`INSERT INTO catalog_regions(
+      id,country_code,code,name,native_name,zh_name,type,path,latitude,longitude
+    ) VALUES (50,'DE','BY','Bavaria','Bayern','','state','Bavaria',48.9,11.4)`).run();
+    for (let index = 0; index < 5; index += 1) {
+      await database.prepare(`INSERT INTO catalog_postcodes(
+        id,country_code,region_id,city_id,code,locality_name,latitude,longitude
+      ) VALUES (?,?,?,?,?,?,?,?)`).bind(
+        5000 + index, 'DE', 50, null, `8000${index}`, 'München', 48.14, 11.58
+      ).run();
+    }
+    const directory = resolve('.data-cache', 'postal-hierarchy-tests', randomUUID());
+    directories.push(directory);
+    await mkdir(directory, { recursive: true });
+    const file = resolve(directory, 'fixture-de-migration.jsonl');
+    const records = Array.from({ length: 5 }, (_, index) => ({
+      id: `de-migration-${index}`, country: 'DE', admin1: 'Bayern', locality: 'München', postal_city: 'München',
+      address_levels: ['Bayern', 'München'], postcode: `8000${index}`, street: 'Teststraße', number: String(index + 1),
+      longitude: 11.58 + index / 10_000, latitude: 48.14, property_type: 'residential',
+      residential_building_id: `building-de-migration-${index}`, residential_building_class: 'house'
+    }));
+    const migrationSource = { ...source, id: 'fixture-de-by' };
+    const shard = { id: 'geofabrik-osm-de-by', countryCode: 'DE', source: migrationSource };
+    await writeFile(file, `${records.map(JSON.stringify).join('\n')}\n`, 'utf8');
+    const importer = createImporter(database);
+    const first = await importer.importShard({
+      shard, discovery: { version: 'v1', dataUrl: migrationSource.dataUrl },
+      materialized: { file, format: 'overture-jsonl', checksum: 'f'.repeat(64) },
+      maxRecords: 10, perLocality: 10
+    });
+    await database.prepare(`UPDATE address_datasets SET version='legacy-strict-residential-v22' WHERE id=?`)
+      .bind(first.datasetId).run();
+    await writeFile(file, `${records.slice(0, 4).map(JSON.stringify).join('\n')}\n`, 'utf8');
+
+    const migrated = await importer.importShard({
+      shard, discovery: { version: 'v2', dataUrl: migrationSource.dataUrl },
+      materialized: { file, format: 'overture-jsonl', checksum: '0'.repeat(64) },
+      maxRecords: 10, perLocality: 10
+    });
+
+    expect(migrated).toMatchObject({
+      acceptedCount: 4,
+      metrics: expect.objectContaining({ previousCount: 5, minimumCountRatio: 0.8 })
+    });
+    database.close();
+  });
 });
