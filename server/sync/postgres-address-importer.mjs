@@ -246,15 +246,28 @@ const reconcilePostalHierarchy = (record, geocoder, countryCode, rebuildFormatte
   // authoritative label for US reconciliation.
   const admin1 = countryCode === 'US' ? (region.name || region.native_name || '') : (region.native_name || region.name || '');
   const admin1Code = region.code || '';
+  const postalLocality = countryCode === 'MY' ? String(resolution.postalLocality || '').trim() : '';
   const corrected = foldAdmin1(components.admin1) !== foldAdmin1(admin1)
-    || foldAdmin1(components.admin1Code) !== foldAdmin1(admin1Code);
+    || foldAdmin1(components.admin1Code) !== foldAdmin1(admin1Code)
+    || (postalLocality && foldAdmin1(components.postalLocality) !== foldAdmin1(postalLocality));
   components.admin1 = admin1;
   components.admin1Code = admin1Code;
+  if (postalLocality) components.postalLocality = postalLocality;
   record.admin1 = admin1;
   record.admin1Code = admin1Code;
-  record.englishComponentHints = { ...(record.englishComponentHints || {}), admin1: region.name || admin1 };
+  if (postalLocality) record.postalLocality = postalLocality;
+  record.englishComponentHints = {
+    ...(record.englishComponentHints || {}),
+    admin1: region.name || admin1,
+    ...(postalLocality ? { postalLocality: resolution.postalLocalityEn || postalLocality } : {})
+  };
   if (region.zh_name) {
     record.chineseComponentHints = { ...(record.chineseComponentHints || {}), admin1: region.zh_name };
+  }
+  if (postalLocality && resolution.postalLocalityZh) {
+    record.chineseComponentHints = {
+      ...(record.chineseComponentHints || {}), postalLocality: resolution.postalLocalityZh
+    };
   }
   if (rebuildFormattedAddress) record.formattedAddress = rebuildFormattedAddress(components, countryCode);
   return { valid: true, corrected };
@@ -267,7 +280,7 @@ const refreshRecordIdentity = (record, hash) => {
   record.canonicalHash = canonicalHash;
   record.id = `addr-${canonicalHash.slice(0, 40)}`;
 };
-export const ADDRESS_IMPORT_REVISION = 'strict-residential-v25';
+export const ADDRESS_IMPORT_REVISION = 'strict-residential-v26';
 
 export class SourceQualityError extends Error {
   constructor(shardId, retrySignature, rejectionReasons, metrics = {}) {

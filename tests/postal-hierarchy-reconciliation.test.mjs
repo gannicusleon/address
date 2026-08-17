@@ -79,6 +79,39 @@ describe('postal hierarchy reconciliation', () => {
     database.close();
   });
 
+  it('preserves a Malaysian source locality while setting the canonical postal locality', async () => {
+    const database = openTestDatabase(':memory:');
+    await database.prepare(`INSERT INTO catalog_regions(
+      id,country_code,code,name,native_name,zh_name,type,path,latitude,longitude
+    ) VALUES (14,'MY','14','Kuala Lumpur','Kuala Lumpur','吉隆坡','territory','Kuala Lumpur',3.14,101.69)`).run();
+    await database.prepare(`INSERT INTO catalog_postcodes(
+      id,country_code,region_id,city_id,code,locality_name,latitude,longitude
+    ) VALUES (1400,'MY',14,NULL,'57100','Kuala Lumpur',3.08,101.71)`).run();
+    const directory = resolve('.data-cache', 'postal-hierarchy-tests', randomUUID());
+    directories.push(directory);
+    await mkdir(directory, { recursive: true });
+    const file = resolve(directory, 'fixture-my-postal-locality.jsonl');
+    await writeFile(file, `${JSON.stringify({
+      ...row('57100-1', '57100'), admin1: 'Kuala Lumpur', locality: 'Seri Kembangan', postal_city: '',
+      longitude: 101.71, latitude: 3.08
+    })}\n`, 'utf8');
+
+    const result = await createImporter(database).importShard({
+      shard: { id: 'fixture-my', countryCode: 'MY', source },
+      discovery: { version: 'v2', dataUrl: source.dataUrl },
+      materialized: { file, format: 'overture-jsonl', checksum: 'c'.repeat(64) },
+      maxRecords: 10, perLocality: 10
+    });
+
+    expect(result).toMatchObject({ acceptedCount: 1, metrics: expect.objectContaining({ postalCorrections: 1 }) });
+    expect(await database.prepare(`SELECT admin1,admin1_code,locality,postal_locality,postcode
+      FROM address_pool_runtime`).first()).toMatchObject({
+      admin1: 'Kuala Lumpur', admin1_code: '14', locality: 'Seri Kembangan',
+      postal_locality: 'Kuala Lumpur', postcode: '57100'
+    });
+    database.close();
+  });
+
   it('uses the canonical US state name when catalog native_name is corrupt', async () => {
     const database = openTestDatabase(':memory:');
     await database.prepare(`INSERT INTO catalog_regions(

@@ -107,7 +107,10 @@ describe('catalog reverse geocoder', () => {
     expect(geocoder.resolvePostalRegion({
       latitude: 2.99, longitude: 101.79,
       components: { postcode: '43000', locality: 'Kajang', admin1: 'Putrajaya', admin1Code: '16' }
-    })).toMatchObject({ status: 'resolved', region: { code: '10', name: 'Selangor' } });
+    })).toMatchObject({
+      status: 'resolved', region: { code: '10', name: 'Selangor' },
+      postalLocality: 'Kajang', postalLocalityEn: 'Kajang'
+    });
     expect(geocoder.resolvePostalRegion({ components: { postcode: '99999', locality: 'Nowhere' } }))
       .toEqual({ status: 'postcode_not_in_catalog' });
   });

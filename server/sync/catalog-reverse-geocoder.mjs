@@ -75,6 +75,31 @@ const postalKeys = (countryCode, value) => {
 };
 const placeKey = (value) => String(value || '').normalize('NFKD').replace(/[\u0300-\u036f]/gu, '')
   .toLocaleLowerCase('und').replace(/[^\p{L}\p{N}]+/gu, '');
+const resolvedPostalLocality = (candidates) => {
+  const names = new Map();
+  for (const candidate of candidates) {
+    const native = String(candidate.locality_name || candidate.city_native || candidate.city_name || '').trim();
+    if (!native) continue;
+    const key = placeKey(native);
+    if (key && !names.has(key)) names.set(key, {
+      native,
+      en: String(candidate.city_name || candidate.locality_name || native).trim(),
+      zh: String(candidate.city_zh || '').trim()
+    });
+  }
+  return names.size === 1 ? [...names.values()][0] : null;
+};
+const resolvedPostalRegion = (region, candidates) => {
+  const locality = resolvedPostalLocality(candidates);
+  return {
+    status: 'resolved', region,
+    ...(locality ? {
+      postalLocality: locality.native,
+      postalLocalityEn: locality.en,
+      postalLocalityZh: locality.zh
+    } : {})
+  };
+};
 
 // Region names that must never appear for a given country (cross-border catalog leakage).
 const excludedRegionNames = {
@@ -241,7 +266,7 @@ export class CatalogReverseGeocoder {
       const region = this.regionsById.get(candidate.region_id);
       if (region) regions.set(region.id, region);
     }
-    if (regions.size === 1) return { status: 'resolved', region: [...regions.values()][0] };
+    if (regions.size === 1) return resolvedPostalRegion([...regions.values()][0], candidates);
 
     const sourcePlaces = [components.locality, components.postalLocality]
       .map(placeKey).filter(Boolean);
@@ -254,7 +279,14 @@ export class CatalogReverseGeocoder {
         const region = this.regionsById.get(candidate.region_id);
         if (region) matchingRegions.set(region.id, region);
       }
-      if (matchingRegions.size === 1) return { status: 'resolved', region: [...matchingRegions.values()][0] };
+      if (matchingRegions.size === 1) {
+        const matchingCandidates = candidates.filter((candidate) => {
+          const names = [candidate.locality_name, candidate.city_name, candidate.city_native, candidate.city_zh]
+            .map(placeKey).filter(Boolean);
+          return names.some((name) => sourcePlaces.includes(name));
+        });
+        return resolvedPostalRegion([...matchingRegions.values()][0], matchingCandidates);
+      }
     }
 
     const latitude = Number(record.latitude);
@@ -272,7 +304,7 @@ export class CatalogReverseGeocoder {
     const competing = ranked.find(({ candidate }) => candidate.region_id !== best.candidate.region_id);
     if (competing && competing.score < best.score * 4) return { status: 'ambiguous_postal_region' };
     const region = this.regionsById.get(best.candidate.region_id);
-    return region ? { status: 'resolved', region } : { status: 'ambiguous_postal_region' };
+    return region ? resolvedPostalRegion(region, [best.candidate]) : { status: 'ambiguous_postal_region' };
   }
 
   nearestFrom(pool, latitude, longitude, maxDegrees, predicate) {
